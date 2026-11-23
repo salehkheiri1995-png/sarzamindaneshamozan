@@ -120,18 +120,29 @@ export function AdminPanel() {
     load();
   }, [load]);
 
-  const toggleTeacherApproval = async (uid: string, approved: boolean) => {
+  const toggleUserApproval = async (uid: string, approved: boolean, role: string) => {
     setStatusMsg(null);
+    const isParent = role === 'parent';
     try {
       await apiFetch(`/api/admin/teachers/${uid}/approve`, {
         method: 'PATCH',
-        body: JSON.stringify({ approved }),
+        body: JSON.stringify({ approved, role }),
       });
       soundEngine.playCorrect();
-      setStatusMsg(approved ? 'حساب معلم با موفقیت تأیید شد.' : 'دسترسی معلمی لغو شد.');
+      if (isParent) {
+        setStatusMsg(approved ? 'حساب والدین با موفقیت تأیید شد.' : 'تأیید حساب والدین لغو شد.');
+      } else {
+        setStatusMsg(approved ? 'حساب معلم با موفقیت تأیید شد.' : 'دسترسی معلمی لغو شد.');
+      }
       load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'بروزرسانی وضعیت معلم ناموفق بود.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : isParent
+            ? 'بروزرسانی وضعیت والدین ناموفق بود.'
+            : 'بروزرسانی وضعیت معلم ناموفق بود.'
+      );
     }
   };
 
@@ -403,7 +414,7 @@ export function AdminPanel() {
         <section className="rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-base font-extrabold text-stone-900">
-              مدیریت کاربران و تأیید حساب معلمان
+              مدیریت کاربران و تأیید حساب‌ها
             </h3>
             <div className="flex items-center gap-1 rounded-xl bg-[#EFE6D5] p-1">
               {(
@@ -436,45 +447,54 @@ export function AdminPanel() {
                   <th className="py-2.5 font-bold">نام کاربری / ایمیل</th>
                   <th className="py-2.5 font-bold">نقش</th>
                   <th className="py-2.5 font-bold">مدرسه</th>
-                  <th className="py-2.5 font-bold">وضعیت معلم</th>
+                  <th className="py-2.5 font-bold">وضعیت تأیید</th>
                   <th className="py-2.5 font-bold">عملیات</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#F5EFE2]">
-                {filteredUsers.map((u) => (
-                  <tr key={u.uid}>
-                    <td className="py-3 font-bold text-stone-900">{u.displayName}</td>
-                    <td className="py-3 text-stone-600 font-mono text-xs">
-                      {u.username ? `@${u.username}` : u.email}
-                    </td>
-                    <td className="py-3 font-semibold text-stone-700">
-                      {u.role === 'admin' ? 'مدیر کل' : u.role === 'teacher' ? 'معلم' : 'والدین'}
-                    </td>
-                    <td className="py-3 text-xs text-stone-600">{u.schoolName || '—'}</td>
-                    <td className="py-3 text-xs font-bold">
-                      {u.teacherApproved ? (
-                        <span className="text-emerald-700">تأییدشده</span>
-                      ) : (
-                        <span className="text-amber-700">در انتظار / عادی</span>
-                      )}
-                    </td>
-                    <td className="py-3">
-                      {u.role !== 'admin' && (
-                        <button
-                          type="button"
-                          onClick={() => toggleTeacherApproval(u.uid, !u.teacherApproved)}
-                          className={`rounded-lg px-3 py-1.5 text-xs font-bold cursor-pointer ${
-                            u.teacherApproved
-                              ? 'border border-rose-300 text-rose-700 hover:bg-rose-50'
-                              : 'bg-emerald-700 text-white hover:bg-emerald-800'
-                          }`}
-                        >
-                          {u.teacherApproved ? 'لغو دسترسی معلم' : 'تأیید به عنوان معلم'}
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {filteredUsers.map((u) => {
+                  const isParent = u.role === 'parent';
+                  return (
+                    <tr key={u.uid}>
+                      <td className="py-3 font-bold text-stone-900">{u.displayName}</td>
+                      <td className="py-3 text-stone-600 font-mono text-xs">
+                        {u.username ? `@${u.username}` : u.email}
+                      </td>
+                      <td className="py-3 font-semibold text-stone-700">
+                        {u.role === 'admin' ? 'مدیر کل' : u.role === 'teacher' ? 'معلم' : 'والدین'}
+                      </td>
+                      <td className="py-3 text-xs text-stone-600">{u.schoolName || '—'}</td>
+                      <td className="py-3 text-xs font-bold">
+                        {u.role === 'admin' || u.teacherApproved ? (
+                          <span className="text-emerald-700">تأییدشده</span>
+                        ) : (
+                          <span className="text-amber-700">در انتظار تأیید</span>
+                        )}
+                      </td>
+                      <td className="py-3">
+                        {u.role !== 'admin' && (
+                          <button
+                            type="button"
+                            onClick={() => toggleUserApproval(u.uid, !u.teacherApproved, u.role)}
+                            className={`rounded-lg px-3 py-1.5 text-xs font-bold cursor-pointer ${
+                              u.teacherApproved
+                                ? 'border border-rose-300 text-rose-700 hover:bg-rose-50'
+                                : 'bg-emerald-700 text-white hover:bg-emerald-800'
+                            }`}
+                          >
+                            {isParent
+                              ? u.teacherApproved
+                                ? 'لغو تأیید والدین'
+                                : 'تأیید به عنوان والدین'
+                              : u.teacherApproved
+                                ? 'لغو دسترسی معلم'
+                                : 'تأیید به عنوان معلم'}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -662,11 +682,10 @@ export function AdminPanel() {
                     <button
                       type="button"
                       onClick={() => deleteContent(c.id)}
-                      className="inline-flex items-center gap-1 rounded-lg border border-rose-300 px-2.5 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-50 cursor-pointer"
-                      title="حذف از پایگاه داده"
+                      className="inline-flex items-center gap-1 rounded-lg border border-rose-300 px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-50 cursor-pointer"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
-                      حذف
+                      <span>حذف</span>
                     </button>
                   </div>
                 </div>
