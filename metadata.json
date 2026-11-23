@@ -1,0 +1,6 @@
+{
+  "name": "سرزمین دانش‌آموزان قهرمان",
+  "description": "بازی آموزشی تعاملی برای دانش‌آموزان پایه اول تا ششم ابتدایی با سرزمین‌های داستانی، دفتر تکالیف، آزمون بدون تبلیغ، دستیار هوشمند و پنل والدین، معلم و مدیر.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

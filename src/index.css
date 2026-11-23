@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Vazirmatn", system-ui, -apple-system, sans-serif;
+  --font-display: "Lalezar", "Vazirmatn", system-ui, sans-serif;
+}
+
+@layer base {
+  html {
+    font-family: "Vazirmatn", system-ui, -apple-system, sans-serif;
+    direction: rtl;
+  }
+
+  h1, h2, .font-display {
+    text-wrap: balance;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes floatSlow {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes cloudDrift {
+  0% {
+    transform: translateX(0px);
+  }
+  50% {
+    transform: translateX(18px);
+  }
+  100% {
+    transform: translateX(0px);
+  }
+}
+
+.animate-float-slow {
+  animation: floatSlow 4.5s ease-in-out infinite;
+}
+
+.animate-cloud-drift {
+  animation: cloudDrift 16s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-float-slow,
+  .animate-cloud-drift {
+    animation: none;
+  }
+}
