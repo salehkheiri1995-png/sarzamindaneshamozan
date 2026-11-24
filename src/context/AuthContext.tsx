@@ -18,6 +18,8 @@ export interface DbUser {
   displayName: string;
   role: 'parent' | 'teacher' | 'admin';
   teacherApproved: boolean;
+  isActive?: boolean;
+  hasPassword?: boolean;
   schoolName: string | null;
   teachingGrades: string;
   teachingSubjects: string;
@@ -48,6 +50,18 @@ export interface StudentProfile {
   lastGameType: string | null;
 }
 
+export interface GlobalAnnouncement {
+  id: number;
+  classroomId: number | null;
+  senderName: string;
+  targetAudience?: string;
+  title?: string | null;
+  kind: string;
+  message: string;
+  scheduledDate: string | null;
+  createdAt: string;
+}
+
 interface AuthContextValue {
   isAuthenticated: boolean;
   sessionRole: SessionRole | null;
@@ -55,6 +69,7 @@ interface AuthContextValue {
   dbUser: DbUser | null;
   students: StudentProfile[];
   activeStudent: StudentProfile | null;
+  globalAnnouncements: GlobalAnnouncement[];
   loading: boolean;
   authError: string | null;
   clearAuthError: () => void;
@@ -94,6 +109,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [dbUser, setDbUser] = useState<DbUser | null>(null);
   const [students, setStudents] = useState<StudentProfile[]>([]);
   const [activeStudentId, setActiveStudentIdState] = useState<number | null>(null);
+  const [globalAnnouncements, setGlobalAnnouncements] = useState<GlobalAnnouncement[]>([]);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
 
@@ -128,12 +144,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           sessionRole: SessionRole;
           user: DbUser | null;
           students: StudentProfile[];
+          globalAnnouncements?: GlobalAnnouncement[];
         }>('/api/me', { headers });
 
         activePortalRef.current = data.sessionRole;
         setSessionRole(data.sessionRole);
         setDbUser(data.user);
         setStudents(data.students);
+        setGlobalAnnouncements(data.globalAnnouncements || []);
         setActiveStudentIdState((prev) => {
           if (prev && data.students.some((s) => s.id === prev)) return prev;
           return data.students[0]?.id ?? null;
@@ -166,6 +184,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setDbUser(null);
         setStudents([]);
         setActiveStudentIdState(null);
+        setGlobalAnnouncements([]);
       }
       setLoading(false);
     });
@@ -235,6 +254,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const list = data.student ? [data.student] : data.students || [];
       setStudents(list);
       setActiveStudentIdState(list[0]?.id ?? null);
+      apiFetch<{ announcements: GlobalAnnouncement[] }>('/api/announcements/global')
+        .then((res) => setGlobalAnnouncements(res.announcements || []))
+        .catch(() => {});
       return { ok: true, role: data.sessionRole, studentCount: list.length };
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : 'ورود ناموفق بود.');
@@ -267,6 +289,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setDbUser(data.user);
       setStudents(data.students || []);
       setActiveStudentIdState(null);
+      apiFetch<{ announcements: GlobalAnnouncement[] }>('/api/announcements/global')
+        .then((res) => setGlobalAnnouncements(res.announcements || []))
+        .catch(() => {});
       return { ok: true, role: data.sessionRole };
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : 'ثبت‌نام ناموفق بود.');
@@ -312,6 +337,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setDbUser(null);
     setStudents([]);
     setActiveStudentIdState(null);
+    setGlobalAnnouncements([]);
     setAuthError(null);
   };
 
@@ -331,6 +357,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         dbUser,
         students,
         activeStudent,
+        globalAnnouncements,
         loading,
         authError,
         clearAuthError: () => setAuthError(null),

@@ -11,6 +11,7 @@ import {
 } from '../../shared/curriculum';
 import { HeroAvatarSvg } from './HeroAvatarSvg';
 import { soundEngine } from '../../lib/sound';
+import { apiFetch } from '../../lib/api';
 import {
   Compass,
   Play,
@@ -20,22 +21,69 @@ import {
   Coffee,
   ArrowRight,
   ExternalLink,
+  Megaphone,
+  GraduationCap,
+  Lock,
+  Link2,
 } from 'lucide-react';
 
 interface WorldHubProps {
   world: StudentWorldData;
+  isDemoMode?: boolean;
+  onRefresh?: () => void;
   onSelectMission: (mission: MissionItem) => void;
 }
 
-export function WorldHub({ world, onSelectMission }: WorldHubProps) {
+export function WorldHub({
+  world,
+  isDemoMode = false,
+  onRefresh,
+  onSelectMission,
+}: WorldHubProps) {
   const [selectedRealmId, setSelectedRealmId] = useState<RealmId | null>(null);
   const [activeVideo, setActiveVideo] = useState<TeacherVideoItem | null>(null);
   const [videoQuizChoice, setVideoQuizChoice] = useState<string | null>(null);
   const [videoQuizDone, setVideoQuizDone] = useState(false);
 
+  const [joinCode, setJoinCode] = useState('');
+  const [joinLoading, setJoinLoading] = useState(false);
+  const [joinFeedback, setJoinFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+
   const gradeInfo = GRADES.find((g) => g.id === world.student.gradeId) || GRADES[0];
   const recommendedMission = world.missions.find((m) => m.id === world.recommendedMissionId) || world.missions[0];
   const needsBreak = world.student.minutesUsedToday >= world.student.dailyLimitMinutes;
+
+  const handleStudentJoinClass = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isDemoMode || !joinCode.trim()) return;
+    setJoinLoading(true);
+    setJoinFeedback(null);
+    try {
+      const res = await apiFetch<{ classroom: { name: string }; alreadyJoined: boolean }>(
+        `/api/students/${world.student.id}/join-class`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ joinCode: joinCode.trim() }),
+        }
+      );
+      soundEngine.playVictory();
+      setJoinCode('');
+      setJoinFeedback({
+        ok: true,
+        text: res.alreadyJoined
+          ? `تو قبلاً عضو کلاس «${res.classroom.name}» هستی.`
+          : `عالی! با موفقیت وارد کلاس «${res.classroom.name}» شدی.`,
+      });
+      onRefresh?.();
+    } catch (err) {
+      setJoinFeedback({
+        ok: false,
+        text: err instanceof Error ? err.message : 'عضویت در کلاس انجام نشد.',
+      });
+    } finally {
+      setJoinLoading(false);
+    }
+  };
 
   const selectedRealm = selectedRealmId
     ? REALMS.find((r) => r.id === selectedRealmId) || null
@@ -149,6 +197,22 @@ export function WorldHub({ world, onSelectMission }: WorldHubProps) {
 
   return (
     <div className="space-y-7">
+      {/* Global Announcements Banner */}
+      {(world.globalAnnouncements || []).length > 0 && (
+        <div className="rounded-2xl border border-indigo-200 bg-indigo-50/80 px-5 py-3.5 space-y-1.5">
+          <p className="text-xs font-extrabold text-indigo-950 flex items-center gap-1.5">
+            <Megaphone className="h-4 w-4 text-indigo-700" />
+            <span>اطلاعیه مدیریت سامانه</span>
+          </p>
+          {world.globalAnnouncements.slice(0, 2).map((ga) => (
+            <p key={ga.id} className="text-xs sm:text-sm font-semibold text-indigo-900">
+              {ga.title ? `${ga.title}: ` : ''}
+              {ga.message}
+            </p>
+          ))}
+        </div>
+      )}
+
       {/* Gentle Break Suggestion Banner when daily limit reached */}
       {needsBreak && (
         <div className="rounded-2xl border border-amber-300 bg-amber-50 px-5 py-4 flex items-center gap-3 text-sm font-bold text-amber-950">
@@ -293,73 +357,152 @@ export function WorldHub({ world, onSelectMission }: WorldHubProps) {
         })}
       </section>
 
-      {/* Teacher Videos & Classroom Safe Announcements */}
-      {(world.videos.length > 0 || world.announcements.length > 0) && (
-        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Teacher Videos */}
-          <div className="rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-4">
+      {/* My Classes & Parental-Controlled Classroom Join */}
+      {!isDemoMode && (
+        <section className="rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-lg font-extrabold text-stone-900 flex items-center gap-2">
-              <Video className="h-5 w-5 text-teal-700" />
-              <span>فیلم‌های آموزشی کلاس من</span>
+              <GraduationCap className="h-5 w-5 text-teal-700" />
+              <span>کلاس‌های من و عضویت با کد</span>
             </h3>
-            {world.videos.length === 0 ? (
-              <p className="text-sm text-stone-500">هنوز فیلم آموزشی در کلاس‌های تو منتشر نشده است.</p>
-            ) : (
-              <div className="space-y-3">
-                {world.videos.map((v) => (
-                  <div
-                    key={v.id}
-                    className="rounded-xl border border-[#EFE6D5] bg-[#FBF7EF] p-4 flex items-center justify-between gap-3"
-                  >
-                    <div>
-                      <p className="text-sm font-extrabold text-stone-900">{v.title}</p>
-                      <p className="text-xs text-stone-600">
-                        {v.chapterId} · مدت {v.durationLabel}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveVideo(v);
-                        setVideoQuizChoice(null);
-                        setVideoQuizDone(false);
-                      }}
-                      className="rounded-xl bg-teal-700 hover:bg-teal-800 px-3.5 py-2 text-xs font-bold text-white cursor-pointer whitespace-nowrap"
-                    >
-                      مشاهده و پرسش
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
 
-          {/* Safe One-Way Classroom Announcements */}
-          <div className="rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-4">
-            <h3 className="text-lg font-extrabold text-stone-900 flex items-center gap-2">
-              <Bell className="h-5 w-5 text-amber-600" />
-              <span>پیام‌ها و تقویم آموزشی معلم</span>
-            </h3>
-            {world.announcements.length === 0 ? (
-              <p className="text-sm text-stone-500">پیام جدیدی از کلاس ثبت نشده است.</p>
-            ) : (
-              <div className="space-y-3">
-                {world.announcements.map((a) => (
-                  <div
-                    key={a.id}
-                    className="rounded-xl border border-[#EFE6D5] bg-[#FBF7EF] p-3.5 text-sm text-stone-800"
-                  >
-                    <p className="text-xs font-bold text-amber-800">
-                      معلم {a.senderName} {a.scheduledDate ? `· تاریخ: ${a.scheduledDate}` : ''}
-                    </p>
-                    <p className="mt-1">{a.message}</p>
-                  </div>
-                ))}
+          {world.student.allowClassJoin === false ? (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs sm:text-sm font-bold text-amber-950 flex items-center gap-2">
+              <Lock className="h-4 w-4 text-amber-700 shrink-0" />
+              <span>عضویت در کلاس توسط والدین محدود شده است.</span>
+            </div>
+          ) : (
+            <form onSubmit={handleStudentJoinClass} className="flex flex-wrap items-center gap-2">
+              <div className="relative flex-1 min-w-[200px]">
+                <Link2 className="h-4 w-4 text-stone-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={joinCode}
+                  onChange={(e) => setJoinCode(e.target.value)}
+                  placeholder="کد کلاس معلم را وارد کن (مثلاً HR3-A1B2)"
+                  className="w-full rounded-xl border border-stone-300 pr-9 pl-3 py-2 text-sm font-mono uppercase"
+                />
               </div>
-            )}
-          </div>
+              <button
+                type="submit"
+                disabled={joinLoading}
+                className="rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-60 px-5 py-2 text-sm font-bold text-white cursor-pointer"
+              >
+                {joinLoading ? 'در حال عضویت...' : 'عضویت در کلاس'}
+              </button>
+            </form>
+          )}
+
+          {joinFeedback && (
+            <p
+              className={`text-xs font-bold ${
+                joinFeedback.ok ? 'text-emerald-700' : 'text-rose-700'
+              }`}
+            >
+              {joinFeedback.text}
+            </p>
+          )}
+
+          {world.enrollments.length === 0 ? (
+            <p className="text-xs text-stone-500">
+              هنوز عضو کلاسی نشده‌ای. پس از دریافت کد از معلم می‌توانی وارد کلاس شوی.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {world.enrollments.map((en) => (
+                <div
+                  key={en.enrollmentId}
+                  className="rounded-xl border border-[#EFE6D5] bg-[#FBF7EF] p-3.5 text-xs space-y-1"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-extrabold text-stone-900">{en.classroomName}</span>
+                    <span
+                      className={`font-extrabold ${
+                        en.isActive === false ? 'text-rose-700' : 'text-emerald-700'
+                      }`}
+                    >
+                      {en.isActive === false ? 'بسته‌شده' : 'فعال'}
+                    </span>
+                  </div>
+                  <p className="text-stone-600">
+                    معلم: {en.teacherName || 'معلم کلاس'} · پایه {formatPersianDigits(en.gradeId)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
       )}
+
+      {/* Teacher Videos & Classroom Safe Announcements (Always Visible Section) */}
+      <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Teacher Videos */}
+        <div className="rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-4">
+          <h3 className="text-lg font-extrabold text-stone-900 flex items-center gap-2">
+            <Video className="h-5 w-5 text-teal-700" />
+            <span>ویدیوهای آموزشی کلاس</span>
+          </h3>
+          {world.videos.length === 0 ? (
+            <p className="text-sm text-stone-500">هنوز فیلم آموزشی در کلاس‌های تو منتشر نشده است.</p>
+          ) : (
+            <div className="space-y-3">
+              {world.videos.map((v) => (
+                <div
+                  key={v.id}
+                  className="rounded-xl border border-[#EFE6D5] bg-[#FBF7EF] p-4 flex items-center justify-between gap-3"
+                >
+                  <div>
+                    <p className="text-sm font-extrabold text-stone-900">{v.title}</p>
+                    <p className="text-xs text-stone-600">
+                      {v.classroomName ? `${v.classroomName} · ` : ''}
+                      {v.chapterId} · مدت {v.durationLabel}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveVideo(v);
+                      setVideoQuizChoice(null);
+                      setVideoQuizDone(false);
+                    }}
+                    className="rounded-xl bg-teal-700 hover:bg-teal-800 px-3.5 py-2 text-xs font-bold text-white cursor-pointer whitespace-nowrap"
+                  >
+                    مشاهده و پرسش
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Safe One-Way Classroom Announcements */}
+        <div className="rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-4">
+          <h3 className="text-lg font-extrabold text-stone-900 flex items-center gap-2">
+            <Bell className="h-5 w-5 text-amber-600" />
+            <span>اطلاعیه‌های کلاس و پیام معلم</span>
+          </h3>
+          {world.announcements.length === 0 ? (
+            <p className="text-sm text-stone-500">پیام جدیدی از کلاس ثبت نشده است.</p>
+          ) : (
+            <div className="space-y-3">
+              {world.announcements.map((a) => (
+                <div
+                  key={a.id}
+                  className="rounded-xl border border-[#EFE6D5] bg-[#FBF7EF] p-3.5 text-sm text-stone-800"
+                >
+                  <p className="text-xs font-bold text-amber-800">
+                    معلم {a.senderName}
+                    {a.classroomName ? ` (${a.classroomName})` : ''}
+                    {a.scheduledDate ? ` · تاریخ: ${a.scheduledDate}` : ''}
+                  </p>
+                  <p className="mt-1">{a.message}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* Teacher Video Viewer + Follow-up Comprehension Check Modal (Ad-Free!) */}
       {activeVideo && (

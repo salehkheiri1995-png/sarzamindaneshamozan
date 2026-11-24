@@ -77,6 +77,8 @@ export interface HomeworkSubmissionItem {
 export interface HomeworkItem {
   id: number;
   classroomId: number | null;
+  classroomName?: string | null;
+  classroomIsActive?: boolean;
   creatorRole: string;
   gradeId: number;
   bookId: BookId;
@@ -103,6 +105,8 @@ export interface ExamQuestion {
 export interface ExamItem {
   id: number;
   classroomId: number | null;
+  classroomName?: string | null;
+  classroomIsActive?: boolean;
   gradeId: number;
   bookId: BookId;
   examType: string;
@@ -116,12 +120,15 @@ export interface ExamItem {
 export interface ExamAttemptItem {
   id: number;
   examId: number;
+  examTitle?: string;
   studentId: number;
   score: number;
   maxScore: number;
   correctCount: number;
   totalQuestions: number;
   durationSeconds: number;
+  teacherScore?: number | null;
+  teacherFeedback?: string | null;
   wrongTopicsJson: string;
   strengthsJson: string;
   answersJson: string;
@@ -131,6 +138,7 @@ export interface ExamAttemptItem {
 export interface TeacherVideoItem {
   id: number;
   classroomId: number | null;
+  classroomName?: string | null;
   gradeId: number;
   bookId: BookId;
   chapterId: string;
@@ -148,7 +156,10 @@ export interface TeacherVideoItem {
 export interface AnnouncementItem {
   id: number;
   classroomId: number | null;
+  classroomName?: string | null;
   senderName: string;
+  targetAudience?: string;
+  title?: string | null;
   kind: string;
   message: string;
   scheduledDate: string | null;
@@ -161,6 +172,8 @@ export interface EnrollmentItem {
   classroomName: string;
   gradeId: number;
   joinCode: string;
+  isActive?: boolean;
+  teacherName?: string;
 }
 
 export interface StudentWorldData {
@@ -174,5 +187,6 @@ export interface StudentWorldData {
   examAttempts: ExamAttemptItem[];
   videos: TeacherVideoItem[];
   announcements: AnnouncementItem[];
+  globalAnnouncements: AnnouncementItem[];
   rewardedChestsToday: number;
 }

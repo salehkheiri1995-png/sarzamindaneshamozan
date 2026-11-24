@@ -40,6 +40,14 @@ export async function explainMistakeWithAI(params: {
   return (response.text ?? '').trim();
 }
 
+function safeParseAiJson<T>(raw: string, fallbackError: string): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new Error(fallbackError);
+  }
+}
+
 export async function generateTeacherQuestionWithAI(params: {
   gradeId: number;
   bookId: string;
@@ -102,7 +110,7 @@ export async function generateTeacherQuestionWithAI(params: {
   });
 
   const raw = (response.text ?? '{}').trim();
-  return JSON.parse(raw) as {
+  return safeParseAiJson<{
     learningObjective: string;
     storyIntro: string;
     hintText: string;
@@ -111,7 +119,7 @@ export async function generateTeacherQuestionWithAI(params: {
     sequence?: string[];
     correctAnswer: string;
     explanation: string;
-  };
+  }>(raw, 'پاسخ هوش مصنوعی ساختار معتبری نداشت. لطفاً دوباره تلاش کنید.');
 }
 
 export async function convertHomeworkWithAI(params: {
@@ -170,7 +178,7 @@ export async function convertHomeworkWithAI(params: {
   });
 
   const raw = (response.text ?? '{}').trim();
-  return JSON.parse(raw) as {
+  return safeParseAiJson<{
     ocrConfidenceNote: string;
     questions: Array<{
       promptText: string;
@@ -179,7 +187,7 @@ export async function convertHomeworkWithAI(params: {
       hintText: string;
       explanation: string;
     }>;
-  };
+  }>(raw, 'تبدیل تکلیف توسط هوش مصنوعی خروجی معتبری برنگرداند. لطفاً دوباره امتحان کنید.');
 }
 
 export async function analyzePerformanceWithAI(params: {

@@ -47,7 +47,7 @@ export function ManualQuestionBuilder({
   const [promptText, setPromptText] = useState('');
   const [hintText, setHintText] = useState('صورت سؤال و تصویر آن را با دقت بررسی کن.');
   const [explanation, setExplanation] = useState('');
-  const [publishNow, setPublishNow] = useState(true);
+  const [publishNow, setPublishNow] = useState(isAdmin);
   const [submitting, setSubmitting] = useState(false);
 
   // Uploaded image (base64 Data URL <= 2MB)
@@ -264,6 +264,7 @@ export function ManualQuestionBuilder({
 
     setSubmitting(true);
     try {
+      const effectivePublishNow = isAdmin && publishNow;
       await apiFetch('/api/teacher/questions', {
         method: 'POST',
         body: JSON.stringify({
@@ -282,7 +283,7 @@ export function ManualQuestionBuilder({
           correctAnswer: built.correctAnswer,
           explanation: explanation.trim() || 'پاسخ درست را با دقت مرور کن.',
           contentSource: isAdmin ? 'official_curriculum' : 'teacher',
-          reviewStatus: publishNow ? 'approved' : 'pending_review',
+          reviewStatus: effectivePublishNow ? 'approved' : 'pending_review',
         }),
       });
       soundEngine.playVictory();
@@ -295,9 +296,9 @@ export function ManualQuestionBuilder({
       setOpt3('');
       setOpt4('');
       onCreated(
-        publishNow
+        effectivePublishNow
           ? 'سؤال/بازی جدید ساخته شد و بلافاصله در سرزمین پایه مربوطه منتشر گردید!'
-          : 'سؤال/بازی جدید به عنوان پیش‌نویس در صف بررسی ذخیره شد.'
+          : 'سؤال/بازی جدید با وضعیت «در صف بررسی» ثبت شد و پس از تأیید مدیر کل در بازی دانش‌آموزان فعال می‌گردد.'
       );
     } catch (err) {
       onError(err instanceof Error ? err.message : 'ثبت سؤال جدید با خطا مواجه شد.');
@@ -721,15 +722,21 @@ export function ManualQuestionBuilder({
 
       {/* Footer Submit */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <label className="inline-flex items-center gap-2 text-xs font-bold text-stone-700 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={publishNow}
-            onChange={(e) => setPublishNow(e.target.checked)}
-            className="h-4 w-4 accent-emerald-700"
-          />
-          <span>انتشار مستقیم در سرزمین پایه انتخاب‌شده</span>
-        </label>
+        {isAdmin ? (
+          <label className="inline-flex items-center gap-2 text-xs font-bold text-stone-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={publishNow}
+              onChange={(e) => setPublishNow(e.target.checked)}
+              className="h-4 w-4 accent-emerald-700"
+            />
+            <span>انتشار مستقیم در سرزمین پایه انتخاب‌شده</span>
+          </label>
+        ) : (
+          <p className="text-xs font-semibold text-amber-800">
+            سؤال شما با وضعیت «در صف بررسی» ثبت می‌شود و بلافاصله پس از تأیید مدیر کل در بازی دانش‌آموزان فعال خواهد شد.
+          </p>
+        )}
 
         <button
           type="submit"

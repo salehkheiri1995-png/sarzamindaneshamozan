@@ -35,6 +35,8 @@ import {
   Coins,
   Star,
   Home,
+  Clock,
+  Coffee,
 } from 'lucide-react';
 
 type ShellMode =
@@ -156,6 +158,7 @@ function buildDemoWorld(gradeId: number): StudentWorldData {
     examAttempts: [],
     videos: [],
     announcements: [],
+    globalAnnouncements: [],
     rewardedChestsToday: 0,
   };
 }
@@ -211,6 +214,46 @@ function HeroLandApp() {
       loadStudentWorld(activeStudent.id);
     }
   }, [isAuthenticated, sessionRole, activeStudent, isDemoMode, loadStudentWorld]);
+
+  // Real live daily usage timer (ticks every 60s for active authenticated student sessions)
+  useEffect(() => {
+    if (
+      !isAuthenticated ||
+      isDemoMode ||
+      sessionRole !== 'student' ||
+      (mode !== 'STUDENT_WORLD' && mode !== 'ACTIVE_MISSION') ||
+      !worldData?.student
+    ) {
+      return;
+    }
+    if (worldData.student.minutesUsedToday >= worldData.student.dailyLimitMinutes) {
+      return;
+    }
+    const studentId = worldData.student.id;
+    const intervalId = window.setInterval(async () => {
+      try {
+        const res = await apiFetch<{ student: StudentProfile }>(
+          `/api/students/${studentId}/session-tick`,
+          { method: 'POST' }
+        );
+        updateLocalStudent(res.student);
+        setWorldData((prev) => (prev ? { ...prev, student: res.student } : prev));
+      } catch {
+        // Silent retry on next minute tick
+      }
+    }, 60_000);
+
+    return () => window.clearInterval(intervalId);
+  }, [
+    isAuthenticated,
+    isDemoMode,
+    sessionRole,
+    mode,
+    worldData?.student?.id,
+    worldData?.student?.minutesUsedToday,
+    worldData?.student?.dailyLimitMinutes,
+    updateLocalStudent,
+  ]);
 
   // Strict Role Guard: force user back into their own role's workspace if state drifts
   useEffect(() => {
@@ -382,12 +425,22 @@ function HeroLandApp() {
     );
   }
 
-  // 3. Dedicated Full-Screen Ad-Free Mission Player (Student or Demo ONLY)
+  const isStudentWorkspace = isDemoMode || sessionRole === 'student';
+  const currentStudent = isStudentWorkspace ? worldData?.student || activeStudent : null;
+  const isTimeLimitReached = Boolean(
+    !isDemoMode &&
+      sessionRole === 'student' &&
+      currentStudent &&
+      currentStudent.minutesUsedToday >= currentStudent.dailyLimitMinutes
+  );
+
+  // 3. Dedicated Full-Screen Ad-Free Mission Player (Student or Demo ONLY, blocked if daily limit reached)
   if (
     mode === 'ACTIVE_MISSION' &&
     activeMission &&
     worldData &&
-    (isDemoMode || sessionRole === 'student')
+    (isDemoMode || sessionRole === 'student') &&
+    !isTimeLimitReached
   ) {
     return (
       <MissionPlayer
@@ -404,11 +457,17 @@ function HeroLandApp() {
     );
   }
 
-  const isStudentWorkspace = isDemoMode || sessionRole === 'student';
-  const currentStudent = isStudentWorkspace ? worldData?.student || activeStudent : null;
   const currentGradeTitle = currentStudent
     ? GRADES.find((g) => g.id === currentStudent.gradeId)?.shortTitle
     : '';
+  const remainingMinutesToday = currentStudent
+    ? Math.max(0, currentStudent.dailyLimitMinutes - currentStudent.minutesUsedToday)
+    : 0;
+  const pendingHwCount = worldData ? worldData.homeworks.filter((h) => !h.submission).length : 0;
+  const takenExamIds = new Set((worldData?.examAttempts || []).map((a) => a.examId));
+  const pendingExamCount = worldData
+    ? worldData.exams.filter((e) => !takenExamIds.has(e.id)).length
+    : 0;
 
   return (
     <div className="min-h-screen bg-[#FBF7EF] flex flex-col">
@@ -468,12 +527,12 @@ function HeroLandApp() {
               <>
                 {(
                   [
-                    ['map', 'نقشه سرزمین‌ها', Map],
-                    ['homework', 'دفتر تکالیف', BookOpenCheck],
-                    ['exams', 'آزمون‌ها', ClipboardCheck],
-                    ['castle', 'قلعه و فروشگاه', Castle],
+                    ['map', 'نقشه سرزمین‌ها', Map, 0],
+                    ['homework', 'دفتر تکالیف', BookOpenCheck, pendingHwCount],
+                    ['exams', 'آزمون‌ها', ClipboardCheck, pendingExamCount],
+                    ['castle', 'قلعه و فروشگاه', Castle, 0],
                   ] as const
-                ).map(([key, label, Icon]) => {
+                ).map(([key, label, Icon, badgeCount]) => {
                   const active = mode === 'STUDENT_WORLD' && subTab === key;
                   return (
                     <button
@@ -492,6 +551,17 @@ function HeroLandApp() {
                     >
                       <Icon className="h-4 w-4" />
                       <span>{label}</span>
+                      {badgeCount > 0 && (
+                        <span
+                          className={`rounded-md px-1.5 py-0.5 text-[11px] font-extrabold tabular-nums ${
+                            active
+                              ? 'bg-stone-900 text-amber-300'
+                              : 'bg-amber-500 text-stone-950'
+                          }`}
+                        >
+                          {formatPersianDigits(badgeCount)}
+                        </span>
+                      )}
                     </button>
                   );
                 })}
@@ -524,6 +594,17 @@ function HeroLandApp() {
           <div className="flex items-center gap-3">
             {isStudentWorkspace && currentStudent && (
               <div className="hidden md:flex items-center gap-3 text-xs font-extrabold tabular-nums">
+                {!isDemoMode && (
+                  <span
+                    className={`inline-flex items-center gap-1 ${
+                      remainingMinutesToday <= 5 ? 'text-rose-300' : 'text-emerald-300'
+                    }`}
+                    title="سقف زمان روزانه تعیین‌شده توسط والدین"
+                  >
+                    <Clock className="h-4 w-4" />
+                    {formatPersianDigits(remainingMinutesToday)} دقیقه باقی‌مانده
+                  </span>
+                )}
                 <span className="inline-flex items-center gap-1 text-amber-300">
                   <Coins className="h-4 w-4" />
                   {formatPersianDigits(currentStudent.coins)}
@@ -608,9 +689,47 @@ function HeroLandApp() {
         )}
 
         {/* 1. STUDENT ONLY WORKSPACE */}
-        {isStudentWorkspace && mode === 'STUDENT_WORLD' && (
+        {isStudentWorkspace && (mode === 'STUDENT_WORLD' || mode === 'ACTIVE_MISSION') && (
           <>
-            {worldLoading && !worldData ? (
+            {isTimeLimitReached && currentStudent ? (
+              <div className="mx-auto max-w-xl rounded-3xl border border-amber-300 bg-white p-8 sm:p-10 text-center space-y-5 shadow-sm">
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-100 text-amber-700">
+                  <Coffee className="h-8 w-8" />
+                </div>
+                <div className="space-y-2">
+                  <h2 className="text-2xl font-extrabold text-stone-900">
+                    وقت استراحت قهرمان!
+                  </h2>
+                  <p className="text-sm text-stone-600 leading-relaxed">
+                    {currentStudent.nickname} عزیز، زمان بازی و تمرین امروزت به پایان رسید (
+                    {formatPersianDigits(currentStudent.minutesUsedToday)} از{' '}
+                    {formatPersianDigits(currentStudent.dailyLimitMinutes)} دقیقه تعیین‌شده توسط والدین).
+                  </p>
+                  <p className="text-xs font-bold text-teal-800">
+                    چند دقیقه چشم‌هایت را ببند، یک لیوان آب بنوش و فردا دوباره با انرژی برگرد!
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveMission(null);
+                      setMode('TITLE_MENU');
+                    }}
+                    className="rounded-xl border border-stone-300 bg-white hover:bg-stone-50 px-5 py-2.5 text-sm font-bold text-stone-800 cursor-pointer"
+                  >
+                    بازگشت به صفحه آغازین
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSignOut}
+                    className="rounded-xl bg-amber-600 hover:bg-amber-700 px-5 py-2.5 text-sm font-bold text-white cursor-pointer"
+                  >
+                    خروج از حساب
+                  </button>
+                </div>
+              </div>
+            ) : worldLoading && !worldData ? (
               <div className="py-16 text-center text-sm font-bold text-stone-600">
                 در حال بارگذاری سرزمین‌ها و مأموریت‌های پایه تحصیلی...
               </div>
@@ -623,6 +742,8 @@ function HeroLandApp() {
                 {subTab === 'map' && (
                   <WorldHub
                     world={worldData}
+                    isDemoMode={isDemoMode}
+                    onRefresh={() => !isDemoMode && loadStudentWorld(worldData.student.id)}
                     onSelectMission={(m) => {
                       setActiveMission(m);
                       setMode('ACTIVE_MISSION');

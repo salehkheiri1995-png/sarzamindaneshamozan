@@ -362,9 +362,17 @@ export function ExamCenter({
               className="rounded-2xl border border-[#E5DAC5] bg-white p-6 flex flex-col justify-between gap-4"
             >
               <div className="space-y-2">
-                <div className="text-xs font-semibold text-stone-500">
-                  {EXAM_TYPE_LABELS[ex.examType] || 'آزمون آموزشی'} · {realm?.bookTitle || 'جامع'} · زمان{' '}
-                  {formatPersianDigits(ex.durationMinutes)} دقیقه
+                <div className="text-xs font-semibold text-stone-500 flex flex-wrap items-center gap-1.5">
+                  <span>
+                    {EXAM_TYPE_LABELS[ex.examType] || 'آزمون آموزشی'} · {realm?.bookTitle || 'جامع'} · زمان{' '}
+                    {formatPersianDigits(ex.durationMinutes)} دقیقه
+                  </span>
+                  {ex.classroomName && (
+                    <span className="text-teal-800 font-bold">· کلاس {ex.classroomName}</span>
+                  )}
+                  {ex.classroomIsActive === false && (
+                    <span className="text-rose-700 font-extrabold">· بسته‌شده</span>
+                  )}
                 </div>
                 <h3 className="text-lg font-extrabold text-stone-900">{ex.title}</h3>
                 <p className="text-xs font-medium text-stone-600 tabular-nums">
@@ -389,17 +397,26 @@ export function ExamCenter({
 
       {examAttempts.length > 0 && (
         <div className="rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-3">
-          <h3 className="text-base font-extrabold text-stone-900">سوابق آزمون‌های اخیر تو</h3>
+          <h3 className="text-base font-extrabold text-stone-900">سوابق آزمون‌های اخیر تو و بازخورد معلم</h3>
           <div className="divide-y divide-[#F1E8D8]">
-            {examAttempts.slice(0, 6).map((att) => (
-              <div key={att.id} className="py-3 flex flex-wrap items-center justify-between gap-3 text-sm">
-                <span className="font-bold text-stone-800">
-                  آزمون #{formatPersianDigits(att.examId)} · {formatPersianDigits(att.correctCount)} از{' '}
-                  {formatPersianDigits(att.totalQuestions)} درست
-                </span>
-                <span className="font-extrabold text-emerald-800 tabular-nums">
-                  نمره: {formatPersianDigits(att.score)} از {formatPersianDigits(att.maxScore)}
-                </span>
+            {examAttempts.slice(0, 8).map((att) => (
+              <div key={att.id} className="py-3 space-y-1">
+                <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+                  <span className="font-bold text-stone-800">
+                    {att.examTitle || `آزمون #${formatPersianDigits(att.examId)}`} ·{' '}
+                    {formatPersianDigits(att.correctCount)} از {formatPersianDigits(att.totalQuestions)} درست
+                  </span>
+                  <span className="font-extrabold text-emerald-800 tabular-nums">
+                    نمره: {formatPersianDigits(att.teacherScore ?? att.score)} از{' '}
+                    {formatPersianDigits(att.maxScore)}
+                    {att.teacherScore !== null && att.teacherScore !== undefined && ' (تأیید معلم)'}
+                  </span>
+                </div>
+                {att.teacherFeedback && (
+                  <p className="text-xs font-semibold text-indigo-800">
+                    بازخورد معلم: {att.teacherFeedback}
+                  </p>
+                )}
               </div>
             ))}
           </div>

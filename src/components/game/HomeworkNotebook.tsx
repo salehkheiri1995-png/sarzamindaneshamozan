@@ -473,9 +473,13 @@ export function HomeworkNotebook({
                 className="rounded-2xl border border-[#E5DAC5] bg-white p-5 flex flex-col justify-between gap-4"
               >
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs font-semibold text-stone-500">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold text-stone-500">
                     <span>
                       {hw.creatorRole === 'teacher' ? 'تکلیف رسمی معلم' : 'تکلیف ثبت‌شده والدین'} · {realm.bookTitle}
+                      {hw.classroomName ? ` (${hw.classroomName})` : ''}
+                      {hw.classroomIsActive === false && (
+                        <span className="mr-1.5 text-rose-700 font-extrabold">· کلاس بسته‌شده</span>
+                      )}
                     </span>
                     <span className="inline-flex items-center gap-1 text-stone-600">
                       <Clock className="h-3.5 w-3.5" />

@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { StudentProfile } from '../../context/AuthContext';
+import { StudentProfile, useAuth } from '../../context/AuthContext';
 import { StudentWorldData } from '../../types/game';
 import { BookId, GRADES, REALMS, formatPersianDigits } from '../../shared/curriculum';
 import { apiFetch } from '../../lib/api';
 import { soundEngine } from '../../lib/sound';
 import { HeroAvatarSvg } from '../game/HeroAvatarSvg';
+import { ChangePasswordCard } from './ChangePasswordCard';
 import {
   UserPlus,
   Clock,
@@ -18,6 +19,13 @@ import {
   Shield,
   ClipboardCheck,
   PlusCircle,
+  Megaphone,
+  Bell,
+  MessageSquare,
+  Trash2,
+  AlertTriangle,
+  LogOut,
+  ShieldCheck,
 } from 'lucide-react';
 
 interface ParentPanelProps {
@@ -39,13 +47,15 @@ export function ParentPanel({
   onRefresh,
   onStudentUpdate,
 }: ParentPanelProps) {
+  const { dbUser, refreshProfile, globalAnnouncements: authGlobalAnnouncements } = useAuth();
   const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly'>('weekly');
   const [joinCode, setJoinCode] = useState('');
   const [joinMsg, setJoinMsg] = useState<string | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsMsg, setSettingsMsg] = useState<string | null>(null);
 
-  // Child login credentials form
+  // Child profile + credentials form
+  const [childNickname, setChildNickname] = useState(activeStudent?.nickname || '');
   const [childUsername, setChildUsername] = useState(activeStudent?.username || '');
   const [childPassword, setChildPassword] = useState('');
   const [credMsg, setCredMsg] = useState<string | null>(null);
@@ -63,29 +73,100 @@ export function ParentPanel({
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
 
+  // Confirm modal (delete child profile or unenroll class)
+  const [confirmAction, setConfirmAction] = useState<
+    | { kind: 'delete_student'; studentId: number; nickname: string }
+    | { kind: 'unenroll_class'; studentId: number; enrollmentId: number; classroomName: string }
+    | null
+  >(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+
   useEffect(() => {
+    setChildNickname(activeStudent?.nickname || '');
     setChildUsername(activeStudent?.username || '');
     setChildPassword('');
     setCredMsg(null);
     setSettingsMsg(null);
     setAiAnalysis(null);
-  }, [activeStudent?.id, activeStudent?.username]);
+  }, [activeStudent?.id, activeStudent?.nickname, activeStudent?.username]);
+
+  const globalNotices = world?.globalAnnouncements || authGlobalAnnouncements || [];
+
+  const renderParentAccountStatus = () => {
+    if (!dbUser) return null;
+    const isApproved = dbUser.role === 'admin' || dbUser.teacherApproved;
+    return (
+      <div className="space-y-3">
+        <div
+          className={`rounded-2xl border px-4 py-3 text-xs sm:text-sm font-bold flex flex-wrap items-center justify-between gap-2 ${
+            isApproved
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-950'
+              : 'border-amber-300 bg-amber-50 text-amber-950'
+          }`}
+        >
+          <span className="inline-flex items-center gap-2">
+            {isApproved ? (
+              <ShieldCheck className="h-4 w-4 text-emerald-700 shrink-0" />
+            ) : (
+              <Clock className="h-4 w-4 text-amber-700 shrink-0" />
+            )}
+            <span>
+              {isApproved
+                ? 'وضعیت حساب والدین: تأییدشده توسط مدیر سامانه'
+                : 'وضعیت حساب والدین: در انتظار تأیید مدیر سامانه (مدیریت پروفایل فرزند، گزارش پیشرفت و تکالیف خانگی هم‌اکنون فعال است)'}
+            </span>
+          </span>
+        </div>
+
+        {globalNotices.length > 0 && (
+          <div className="rounded-2xl border border-indigo-200 bg-indigo-50/75 p-4 space-y-2">
+            <p className="text-xs font-extrabold text-indigo-950 flex items-center gap-1.5">
+              <Megaphone className="h-4 w-4 text-indigo-700" />
+              <span>اطلاعیه‌های سراسری مدیر سامانه</span>
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+              {globalNotices.slice(0, 4).map((a) => (
+                <div
+                  key={a.id}
+                  className="rounded-xl border border-indigo-100 bg-white px-3.5 py-2.5 text-xs"
+                >
+                  <div className="flex items-center justify-between gap-2 font-bold text-indigo-900">
+                    <span>{a.title || `اطلاعیه از ${a.senderName}`}</span>
+                    {a.scheduledDate && <span className="text-stone-500">{a.scheduledDate}</span>}
+                  </div>
+                  <p className="mt-1 text-stone-700 leading-relaxed">{a.message}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   if (!activeStudent) {
     return (
-      <div className="rounded-3xl border border-[#E5DAC5] bg-white p-10 text-center space-y-4">
-        <h2 className="text-2xl font-extrabold text-stone-900">هنوز پروفایل فرزندی ثبت نشده است</h2>
-        <p className="text-sm text-stone-600 max-w-lg mx-auto leading-relaxed">
-          ابتدا پروفایل فرزند خود را بسازید و نام کاربری و رمز عبور اختصاصی برای او تعیین کنید تا از درگاه «ورود دانش‌آموز» مستقیم وارد دنیای بازی پایه خود شود.
-        </p>
-        <button
-          type="button"
-          onClick={onAddStudent}
-          className="inline-flex items-center gap-2 rounded-xl bg-amber-600 hover:bg-amber-700 px-6 py-3 text-sm font-bold text-white cursor-pointer"
-        >
-          <UserPlus className="h-4 w-4" />
-          <span>ساخت پروفایل دانش‌آموز جدید</span>
-        </button>
+      <div className="space-y-6">
+        {renderParentAccountStatus()}
+
+        <div className="rounded-3xl border border-[#E5DAC5] bg-white p-10 text-center space-y-4">
+          <h2 className="text-2xl font-extrabold text-stone-900">هنوز پروفایل فرزندی ثبت نشده است</h2>
+          <p className="text-sm text-stone-600 max-w-lg mx-auto leading-relaxed">
+            ابتدا پروفایل فرزند خود را بسازید و نام کاربری و رمز عبور اختصاصی برای او تعیین کنید تا از درگاه «ورود دانش‌آموز» مستقیم وارد دنیای بازی پایه خود شود.
+          </p>
+          <button
+            type="button"
+            onClick={onAddStudent}
+            className="inline-flex items-center gap-2 rounded-xl bg-amber-600 hover:bg-amber-700 px-6 py-3 text-sm font-bold text-white cursor-pointer"
+          >
+            <UserPlus className="h-4 w-4" />
+            <span>ساخت پروفایل دانش‌آموز جدید</span>
+          </button>
+        </div>
+
+        <div className="max-w-lg mx-auto">
+          <ChangePasswordCard hasPassword={dbUser?.hasPassword} onChanged={() => refreshProfile()} />
+        </div>
       </div>
     );
   }
@@ -106,7 +187,7 @@ export function ParentPanel({
       soundEngine.playCorrect();
       onStudentUpdate(res.student);
       onRefresh();
-      setSettingsMsg('تنظیمات پروفایل دانش‌آموز ذخیره شد.');
+      setSettingsMsg('تنظیمات پروفایل دانش‌آموز ذخیره شد و بلافاصله در پنل دانش‌آموز اعمال گردید.');
     } catch (err) {
       setSettingsMsg(err instanceof Error ? err.message : 'بروزرسانی تنظیمات ناموفق بود.');
     } finally {
@@ -114,15 +195,16 @@ export function ParentPanel({
     }
   };
 
-  const handleSaveChildCredentials = async (e: React.FormEvent) => {
+  const handleSaveChildProfileAndCreds = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!childUsername.trim() && !childPassword.trim()) return;
+    if (!childNickname.trim() && !childUsername.trim() && !childPassword.trim()) return;
     setSavingCreds(true);
     setCredMsg(null);
     try {
       const res = await apiFetch<{ student: StudentProfile }>(`/api/students/${activeStudent.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
+          nickname: childNickname.trim() || undefined,
           username: childUsername.trim() || undefined,
           password: childPassword.trim() || undefined,
         }),
@@ -130,11 +212,9 @@ export function ParentPanel({
       soundEngine.playVictory();
       onStudentUpdate(res.student);
       setChildPassword('');
-      setCredMsg(
-        `اطلاعات ورود مستقل «${res.student.nickname}» با نام کاربری ${res.student.username || childUsername} ذخیره شد.`
-      );
+      setCredMsg(`مشخصات و اطلاعات ورود «${res.student.nickname}» با موفقیت ذخیره شد.`);
     } catch (err) {
-      setCredMsg(err instanceof Error ? err.message : 'ذخیره اطلاعات ورود فرزند ناموفق بود.');
+      setCredMsg(err instanceof Error ? err.message : 'ذخیره اطلاعات فرزند ناموفق بود.');
     } finally {
       setSavingCreds(false);
     }
@@ -206,6 +286,33 @@ export function ParentPanel({
     }
   };
 
+  const executeConfirmAction = async () => {
+    if (!confirmAction) return;
+    setConfirmBusy(true);
+    try {
+      if (confirmAction.kind === 'delete_student') {
+        await apiFetch(`/api/students/${confirmAction.studentId}`, { method: 'DELETE' });
+        soundEngine.playClick();
+        setConfirmAction(null);
+        await refreshProfile();
+      } else if (confirmAction.kind === 'unenroll_class') {
+        await apiFetch(
+          `/api/students/${confirmAction.studentId}/enrollments/${confirmAction.enrollmentId}`,
+          { method: 'DELETE' }
+        );
+        soundEngine.playClick();
+        setConfirmAction(null);
+        setJoinMsg(`فرزند شما از کلاس «${confirmAction.classroomName}» خارج شد.`);
+        onRefresh();
+      }
+    } catch (err) {
+      setJoinMsg(err instanceof Error ? err.message : 'اجرای عملیات با خطا مواجه شد.');
+      setConfirmAction(null);
+    } finally {
+      setConfirmBusy(false);
+    }
+  };
+
   // Time-period filtered report
   const nowMs = Date.now();
   const windowMs =
@@ -233,13 +340,34 @@ export function ParentPanel({
   const homeworks = world?.homeworks || [];
   const completedHomeworks = homeworks.filter((h) => Boolean(h.submission)).length;
   const pendingHomeworks = homeworks.length - completedHomeworks;
+  const homeworkDeliveryRate =
+    homeworks.length > 0 ? Math.round((completedHomeworks / homeworks.length) * 100) : 0;
+
   const examAttempts = world?.examAttempts || [];
+  const avgExamPct =
+    examAttempts.length > 0
+      ? Math.round(
+          examAttempts.reduce(
+            (sum, ea) => sum + (ea.maxScore > 0 ? (ea.score / ea.maxScore) * 100 : 0),
+            0
+          ) / examAttempts.length
+        )
+      : null;
 
   const weakTopics = [...new Set(allAttempts.filter((a) => !a.isCorrect).map((a) => a.topicId))].slice(0, 5);
   const strongTopics = [...new Set(allAttempts.filter((a) => a.isCorrect).map((a) => a.topicId))].slice(0, 5);
 
+  const homeworkFeedbackItems = homeworks.filter(
+    (h) => h.submission && (h.submission.teacherFeedback || h.submission.teacherScore !== null)
+  );
+  const examFeedbackItems = examAttempts.filter(
+    (ea) => ea.teacherFeedback || ea.teacherScore !== null
+  );
+
   return (
     <div className="space-y-7">
+      {renderParentAccountStatus()}
+
       {/* Multi-Child Selector Header */}
       <section className="rounded-3xl border border-[#E5DAC5] bg-white p-6 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-4">
@@ -288,10 +416,10 @@ export function ParentPanel({
         </div>
       </section>
 
-      {/* Timeframe Segmented Filter + 4-Column KPI Strip */}
+      {/* Timeframe Segmented Filter + Weekly Summary KPI Strip */}
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h3 className="text-base font-extrabold text-stone-900">گزارش عملکرد آموزشی</h3>
+          <h3 className="text-base font-extrabold text-stone-900">خلاصه پیشرفت هفتگی و عملکرد آموزشی</h3>
           <div className="flex items-center gap-1 rounded-xl bg-[#EFE6D5] p-1">
             {(
               [
@@ -319,28 +447,39 @@ export function ParentPanel({
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="rounded-2xl border border-[#E5DAC5] bg-white p-5">
-            <p className="text-xs font-semibold text-stone-500">مدت تمرین در بازه / سقف روزانه</p>
-            <p className="mt-1 text-xl sm:text-2xl font-extrabold text-stone-900 tabular-nums">
-              {formatPersianDigits(period === 'daily' ? activeStudent.minutesUsedToday : periodMinutes)} دقیقه · سقف{' '}
-              {formatPersianDigits(activeStudent.dailyLimitMinutes)}
-            </p>
-          </div>
-          <div className="rounded-2xl border border-[#E5DAC5] bg-white p-5">
-            <p className="text-xs font-semibold text-stone-500">دقت پاسخ و امتیاز بازه</p>
+            <p className="text-xs font-semibold text-stone-500">مأموریت‌های حل‌شده و دقت</p>
             <p className="mt-1 text-xl sm:text-2xl font-extrabold text-emerald-700 tabular-nums">
-              {formatPersianDigits(periodAccuracy)}٪ · +{formatPersianDigits(periodXp)} XP
+              {formatPersianDigits(periodCorrect)} از {formatPersianDigits(periodTotal)} ({formatPersianDigits(periodAccuracy)}٪)
+            </p>
+            <p className="mt-1 text-[11px] font-semibold text-stone-500 tabular-nums">
+              +{formatPersianDigits(periodXp)} XP در این بازه
             </p>
           </div>
           <div className="rounded-2xl border border-[#E5DAC5] bg-white p-5">
-            <p className="text-xs font-semibold text-stone-500">وضعیت تکالیف</p>
+            <p className="text-xs font-semibold text-stone-500">نرخ تحویل تکالیف</p>
             <p className="mt-1 text-xl sm:text-2xl font-extrabold text-amber-700 tabular-nums">
-              {formatPersianDigits(completedHomeworks)} انجام‌شده · {formatPersianDigits(pendingHomeworks)} باقیمانده
+              {formatPersianDigits(homeworkDeliveryRate)}٪ ({formatPersianDigits(completedHomeworks)}/{formatPersianDigits(homeworks.length)})
+            </p>
+            <p className="mt-1 text-[11px] font-semibold text-stone-500 tabular-nums">
+              {formatPersianDigits(pendingHomeworks)} تکلیف در انتظار انجام
             </p>
           </div>
           <div className="rounded-2xl border border-[#E5DAC5] bg-white p-5">
-            <p className="text-xs font-semibold text-stone-500">آزمون‌های ثبت‌شده</p>
+            <p className="text-xs font-semibold text-stone-500">میانگین نمرات آزمون</p>
             <p className="mt-1 text-xl sm:text-2xl font-extrabold text-teal-800 tabular-nums">
-              {formatPersianDigits(examAttempts.length)} آزمون · {formatPersianDigits(periodTotal)} مأموریت
+              {avgExamPct !== null ? `${formatPersianDigits(avgExamPct)}٪` : 'بدون آزمون'}
+            </p>
+            <p className="mt-1 text-[11px] font-semibold text-stone-500 tabular-nums">
+              {formatPersianDigits(examAttempts.length)} آزمون ثبت‌شده
+            </p>
+          </div>
+          <div className="rounded-2xl border border-[#E5DAC5] bg-white p-5">
+            <p className="text-xs font-semibold text-stone-500">زمان استفاده روزانه / بازه</p>
+            <p className="mt-1 text-xl sm:text-2xl font-extrabold text-stone-900 tabular-nums">
+              {formatPersianDigits(period === 'daily' ? activeStudent.minutesUsedToday : periodMinutes)} دقیقه
+            </p>
+            <p className="mt-1 text-[11px] font-semibold text-stone-500 tabular-nums">
+              سقف روزانه: {formatPersianDigits(activeStudent.dailyLimitMinutes)} دقیقه
             </p>
           </div>
         </div>
@@ -348,7 +487,7 @@ export function ParentPanel({
 
       {/* Main Two-Column Grid: Progress + Controls */}
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left: Subject Progress + Homework & Exam History */}
+        {/* Left: Subject Progress + Teacher Feedback + Homework & Exam History + Home Homework */}
         <div className="lg:col-span-7 space-y-6">
           <div className="rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-5">
             <h3 className="text-lg font-extrabold text-stone-900 flex items-center gap-2">
@@ -417,6 +556,82 @@ export function ParentPanel({
             </div>
           </div>
 
+          {/* Dedicated Teacher Feedback Section (Homeworks + Exams) */}
+          <div className="rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-4">
+            <h3 className="text-base font-extrabold text-stone-900 flex items-center gap-2">
+              <MessageSquare className="h-5 w-5 text-indigo-700" />
+              <span>بازخورد معلم روی تکالیف و آزمون‌های {activeStudent.nickname}</span>
+            </h3>
+
+            {homeworkFeedbackItems.length === 0 && examFeedbackItems.length === 0 ? (
+              <p className="text-xs text-stone-500">
+                هنوز بازخوردی از سوی معلم روی تکالیف یا آزمون‌های فرزند شما ثبت نشده است.
+              </p>
+            ) : (
+              <div className="space-y-2.5">
+                {homeworkFeedbackItems.map((hw) => (
+                  <div
+                    key={`hf_${hw.id}`}
+                    className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3.5 text-xs space-y-1"
+                  >
+                    <div className="flex items-center justify-between gap-2 font-extrabold text-emerald-950">
+                      <span>تکلیف: {hw.title}</span>
+                      {hw.submission?.teacherScore !== null && (
+                        <span className="tabular-nums">
+                          نمره معلم: {formatPersianDigits(hw.submission!.teacherScore!)} از ۲۰
+                        </span>
+                      )}
+                    </div>
+                    {hw.submission?.teacherFeedback && (
+                      <p className="text-stone-700 leading-relaxed">{hw.submission.teacherFeedback}</p>
+                    )}
+                  </div>
+                ))}
+                {examFeedbackItems.map((ea) => (
+                  <div
+                    key={`ef_${ea.id}`}
+                    className="rounded-xl border border-indigo-200 bg-indigo-50/50 p-3.5 text-xs space-y-1"
+                  >
+                    <div className="flex items-center justify-between gap-2 font-extrabold text-indigo-950">
+                      <span>آزمون: {ea.examTitle || `#${formatPersianDigits(ea.examId)}`}</span>
+                      <span className="tabular-nums">
+                        نمره معلم: {formatPersianDigits(ea.teacherScore ?? ea.score)} از{' '}
+                        {formatPersianDigits(ea.maxScore)}
+                      </span>
+                    </div>
+                    {ea.teacherFeedback && (
+                      <p className="text-stone-700 leading-relaxed">{ea.teacherFeedback}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Classroom Announcements for Parent */}
+          {(world?.announcements || []).length > 0 && (
+            <div className="rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-3">
+              <h3 className="text-base font-extrabold text-stone-900 flex items-center gap-2">
+                <Bell className="h-5 w-5 text-amber-600" />
+                <span>اطلاعیه‌ها و یادآورهای معلم کلاس</span>
+              </h3>
+              <div className="space-y-2.5">
+                {world!.announcements.map((a) => (
+                  <div
+                    key={a.id}
+                    className="rounded-xl border border-[#EFE6D5] bg-[#FBF7EF] p-3.5 text-xs space-y-1"
+                  >
+                    <p className="font-bold text-amber-900">
+                      معلم {a.senderName} {a.classroomName ? `(${a.classroomName})` : ''}{' '}
+                      {a.scheduledDate ? `· تاریخ: ${a.scheduledDate}` : ''}
+                    </p>
+                    <p className="text-sm text-stone-800">{a.message}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Exam History & Homework Tracking */}
           <div className="rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-4">
             <h3 className="text-base font-extrabold text-stone-900 flex items-center gap-2">
@@ -431,7 +646,7 @@ export function ParentPanel({
                 <table className="w-full text-right text-xs">
                   <thead>
                     <tr className="border-b border-[#EFE6D5] text-stone-500">
-                      <th className="py-2 font-bold">شناسه آزمون</th>
+                      <th className="py-2 font-bold">عنوان آزمون</th>
                       <th className="py-2 font-bold">نمره</th>
                       <th className="py-2 font-bold">پاسخ درست</th>
                       <th className="py-2 font-bold">زمان</th>
@@ -440,9 +655,11 @@ export function ParentPanel({
                   <tbody className="divide-y divide-[#F5EFE2]">
                     {examAttempts.slice(0, 8).map((ea) => (
                       <tr key={ea.id}>
-                        <td className="py-2.5 font-bold text-stone-800">آزمون #{formatPersianDigits(ea.examId)}</td>
+                        <td className="py-2.5 font-bold text-stone-800">
+                          {ea.examTitle || `آزمون #${formatPersianDigits(ea.examId)}`}
+                        </td>
                         <td className="py-2.5 font-extrabold text-emerald-700 tabular-nums">
-                          {formatPersianDigits(ea.score)} از {formatPersianDigits(ea.maxScore)}
+                          {formatPersianDigits(ea.teacherScore ?? ea.score)} از {formatPersianDigits(ea.maxScore)}
                         </td>
                         <td className="py-2.5 tabular-nums text-stone-700">
                           {formatPersianDigits(ea.correctCount)} از {formatPersianDigits(ea.totalQuestions)}
@@ -467,6 +684,7 @@ export function ParentPanel({
                   >
                     <span className="font-bold text-stone-900">
                       {hw.title} · مهلت {hw.dueDate}
+                      {hw.classroomName ? ` (${hw.classroomName})` : ''}
                     </span>
                     <span
                       className={`font-extrabold ${
@@ -545,21 +763,30 @@ export function ParentPanel({
           </form>
         </div>
 
-        {/* Right: Child Login Credentials + Parental Safety Controls + Classroom Join */}
+        {/* Right: Child Profile Edit/Delete + Parental Controls + Classroom Join/Unenroll */}
         <div className="lg:col-span-5 space-y-5">
-          {/* Child Independent Login Credentials */}
+          {/* Child Profile & Independent Login Credentials */}
           <form
-            onSubmit={handleSaveChildCredentials}
+            onSubmit={handleSaveChildProfileAndCreds}
             className="rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-4"
           >
             <h3 className="text-base font-extrabold text-stone-900 flex items-center gap-2">
               <KeyRound className="h-5 w-5 text-amber-700" />
-              <span>حساب ورود مستقل فرزند ({activeStudent.nickname})</span>
+              <span>ویرایش پروفایل و حساب ورود ({activeStudent.nickname})</span>
             </h3>
-            <p className="text-xs text-stone-600 leading-relaxed">
-              نام کاربری و رمز عبور فرزند را تنظیم کنید تا از بخش «ورود دانش‌آموز» وارد فضای بازی خودش شود (بدون دسترسی به پنل والدین).
-            </p>
             <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-stone-700 mb-1">
+                  نام نمایشی / لقب قهرمان
+                </label>
+                <input
+                  type="text"
+                  value={childNickname}
+                  onChange={(e) => setChildNickname(e.target.value)}
+                  className="w-full rounded-xl border border-stone-300 px-3.5 py-2.5 text-sm font-bold"
+                  required
+                />
+              </div>
               <div>
                 <label className="block text-xs font-bold text-stone-700 mb-1">
                   نام کاربری دانش‌آموز (انگلیسی)
@@ -590,13 +817,29 @@ export function ParentPanel({
               </div>
             </div>
             {credMsg && <p className="text-xs font-bold text-emerald-700">{credMsg}</p>}
-            <button
-              type="submit"
-              disabled={savingCreds}
-              className="w-full rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-60 py-2.5 text-sm font-bold text-white cursor-pointer"
-            >
-              {savingCreds ? 'در حال ذخیره...' : 'ذخیره نام کاربری و رمز عبور فرزند'}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="submit"
+                disabled={savingCreds}
+                className="flex-1 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-60 py-2.5 text-sm font-bold text-white cursor-pointer"
+              >
+                {savingCreds ? 'در حال ذخیره...' : 'ذخیره مشخصات و رمز فرزند'}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setConfirmAction({
+                    kind: 'delete_student',
+                    studentId: activeStudent.id,
+                    nickname: activeStudent.nickname,
+                  })
+                }
+                className="inline-flex items-center gap-1 rounded-xl border border-rose-300 px-3.5 py-2.5 text-xs font-bold text-rose-700 hover:bg-rose-50 cursor-pointer"
+              >
+                <Trash2 className="h-4 w-4" />
+                <span>حذف پروفایل</span>
+              </button>
+            </div>
           </form>
 
           {/* Grade, Screen Time & Safety Switches */}
@@ -628,7 +871,7 @@ export function ParentPanel({
               <div>
                 <label className="block text-xs font-bold text-stone-700 mb-1 flex items-center gap-1">
                   <Clock className="h-3.5 w-3.5 text-amber-700" />
-                  <span>سقف زمان پیشنهادی روزانه (دقیقه)</span>
+                  <span>سقف زمان روزانه بازی (دقیقه — پس از پایان، صفحه استراحت نمایش داده می‌شود)</span>
                 </label>
                 <select
                   disabled={savingSettings}
@@ -665,7 +908,9 @@ export function ParentPanel({
               <label className="flex items-center justify-between gap-3 rounded-xl border border-[#EFE6D5] bg-[#FBF7EF] px-4 py-3 cursor-pointer">
                 <div>
                   <p className="text-xs font-extrabold text-stone-900">مجوز عضویت در کلاس مدرسه</p>
-                  <p className="text-[11px] text-stone-600">اجازه اتصال به کلاس‌های تأییدشده معلمان</p>
+                  <p className="text-[11px] text-stone-600">
+                    اگر خاموش شود، دانش‌آموز در پنل خود نمی‌تواند با کد وارد کلاس شود.
+                  </p>
                 </div>
                 <input
                   type="checkbox"
@@ -681,11 +926,11 @@ export function ParentPanel({
             {settingsMsg && <p className="text-xs font-bold text-emerald-700">{settingsMsg}</p>}
           </div>
 
-          {/* Parent-Approved Classroom Join */}
+          {/* Parent-Approved Classroom Join & Management */}
           <div className="rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-4">
             <h3 className="text-base font-extrabold text-stone-900 flex items-center gap-2">
               <Link2 className="h-5 w-5 text-teal-700" />
-              <span>اتصال فرزند به کلاس معلم (با تأیید والدین)</span>
+              <span>مدیریت عضویت فرزند در کلاس‌ها</span>
             </h3>
 
             <form onSubmit={handleJoinClass} className="flex gap-2">
@@ -706,23 +951,51 @@ export function ParentPanel({
             {joinMsg && <p className="text-xs font-bold text-amber-900">{joinMsg}</p>}
 
             {(world?.enrollments || []).length > 0 && (
-              <div className="space-y-1.5 pt-2 border-t border-[#F1E8D8]">
+              <div className="space-y-2 pt-2 border-t border-[#F1E8D8]">
                 <p className="text-xs font-bold text-stone-500">کلاس‌های متصل‌شده:</p>
                 {world!.enrollments.map((en) => (
                   <div
                     key={en.enrollmentId}
-                    className="flex items-center justify-between text-xs font-bold text-stone-800"
+                    className="rounded-xl border border-[#EFE6D5] bg-[#FBF7EF] px-3 py-2 flex items-center justify-between gap-2 text-xs"
                   >
-                    <span className="inline-flex items-center gap-1.5">
-                      <GraduationCap className="h-4 w-4 text-teal-700" />
-                      {en.classroomName}
-                    </span>
-                    <span className="font-mono text-stone-500">{en.joinCode}</span>
+                    <div>
+                      <p className="font-bold text-stone-900 inline-flex items-center gap-1.5">
+                        <GraduationCap className="h-4 w-4 text-teal-700" />
+                        <span>{en.classroomName}</span>
+                        <span
+                          className={`text-[11px] font-extrabold ${
+                            en.isActive === false ? 'text-rose-700' : 'text-emerald-700'
+                          }`}
+                        >
+                          ({en.isActive === false ? 'بسته‌شده' : 'فعال'})
+                        </span>
+                      </p>
+                      <p className="text-[11px] text-stone-500">
+                        معلم: {en.teacherName || 'معلم کلاس'} · کد: <span className="font-mono">{en.joinCode}</span>
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setConfirmAction({
+                          kind: 'unenroll_class',
+                          studentId: activeStudent.id,
+                          enrollmentId: en.enrollmentId,
+                          classroomName: en.classroomName,
+                        })
+                      }
+                      className="inline-flex items-center gap-1 rounded-lg border border-rose-300 bg-white px-2.5 py-1 text-[11px] font-bold text-rose-700 hover:bg-rose-50 cursor-pointer shrink-0"
+                    >
+                      <LogOut className="h-3 w-3" />
+                      خروج از کلاس
+                    </button>
                   </div>
                 ))}
               </div>
             )}
           </div>
+
+          <ChangePasswordCard hasPassword={dbUser?.hasPassword} onChanged={() => refreshProfile()} />
         </div>
       </section>
 
@@ -753,6 +1026,53 @@ export function ParentPanel({
           </div>
         )}
       </section>
+
+      {/* Confirm Delete Profile or Unenroll Class Modal */}
+      {confirmAction && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/60 p-4 backdrop-blur-xs"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-[#E5DAC5] bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-extrabold text-stone-900">
+                  {confirmAction.kind === 'delete_student'
+                    ? 'تأیید حذف پروفایل دانش‌آموز'
+                    : 'تأیید خروج از کلاس'}
+                </h3>
+                <p className="text-xs text-stone-600 leading-relaxed">
+                  {confirmAction.kind === 'delete_student'
+                    ? `آیا مطمئن هستید که می‌خواهید پروفایل «${confirmAction.nickname}» و تمام سوابق مأموریت‌ها و امتیازات آن را حذف کنید؟ این عملیات قابل بازگشت نیست.`
+                    : `آیا می‌خواهید فرزند شما از کلاس «${confirmAction.classroomName}» خارج شود؟`}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={confirmBusy}
+                onClick={() => setConfirmAction(null)}
+                className="rounded-xl border border-stone-300 px-4 py-2 text-xs font-bold text-stone-700 hover:bg-stone-50 cursor-pointer"
+              >
+                انصراف
+              </button>
+              <button
+                type="button"
+                disabled={confirmBusy}
+                onClick={executeConfirmAction}
+                className="rounded-xl bg-rose-700 hover:bg-rose-800 px-4 py-2 text-xs font-bold text-white cursor-pointer disabled:opacity-60"
+              >
+                {confirmBusy ? 'در حال انجام...' : 'بله، تأیید و اجرا'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

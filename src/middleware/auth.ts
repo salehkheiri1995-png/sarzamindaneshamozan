@@ -1,6 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
+import { eq } from 'drizzle-orm';
 import { adminAuth } from '../lib/firebase-admin.ts';
 import { verifySessionToken } from '../lib/auth-crypto.ts';
+import { db } from '../db/index.ts';
+import { users } from '../db/schema.ts';
 
 export interface AuthSession {
   uid: string;
@@ -13,6 +16,18 @@ export interface AuthSession {
 
 export interface AuthRequest extends Request {
   user?: AuthSession;
+}
+
+async function ensureAccountActive(uid: string): Promise<boolean> {
+  const [found] = await db
+    .select({ isActive: users.isActive })
+    .from(users)
+    .where(eq(users.uid, uid))
+    .limit(1);
+  if (found && found.isActive === false) {
+    return false;
+  }
+  return true;
 }
 
 export const requireAuth = async (
@@ -33,6 +48,14 @@ export const requireAuth = async (
     if (!payload) {
       return res.status(401).json({ error: 'نشست کاربری نامعتبر یا منقضی شده است.' });
     }
+    if (payload.role !== 'student') {
+      const active = await ensureAccountActive(payload.uid);
+      if (!active) {
+        return res.status(403).json({
+          error: 'حساب کاربری شما غیرفعال شده است. برای پیگیری با مدیر سامانه تماس بگیرید.',
+        });
+      }
+    }
     req.user = {
       uid: payload.uid,
       email: `${payload.username}@heroland.local`,
@@ -47,6 +70,12 @@ export const requireAuth = async (
   // 2. Fallback to Firebase Google ID Token verification
   try {
     const decodedToken = await adminAuth.verifyIdToken(token);
+    const active = await ensureAccountActive(decodedToken.uid);
+    if (!active) {
+      return res.status(403).json({
+        error: 'حساب کاربری شما غیرفعال شده است. برای پیگیری با مدیر سامانه تماس بگیرید.',
+      });
+    }
     req.user = {
       uid: decodedToken.uid,
       email: decodedToken.email || '',

@@ -17,6 +17,7 @@ export const users = pgTable('users', {
   displayName: text('display_name').notNull(),
   role: text('role').notNull().default('parent'), // 'parent' | 'teacher' | 'admin'
   teacherApproved: boolean('teacher_approved').notNull().default(false),
+  isActive: boolean('is_active').notNull().default(true),
   schoolName: text('school_name'),
   teachingGrades: text('teaching_grades').notNull().default('[]'),
   teachingSubjects: text('teaching_subjects').notNull().default('[]'),
@@ -93,6 +94,7 @@ export const educationalContent = pgTable('educational_content', {
   explanation: text('explanation').notNull(),
   contentSource: text('content_source').notNull().default('official_curriculum'), // official_curriculum | teacher | ai_generated
   reviewStatus: text('review_status').notNull().default('approved'), // pending_review | approved | rejected
+  rejectionReason: text('rejection_reason'),
   authorUid: text('author_uid'),
   createdAt: timestamp('created_at').defaultNow(),
 });
@@ -180,6 +182,8 @@ export const examAttempts = pgTable('exam_attempts', {
   wrongTopicsJson: text('wrong_topics_json').notNull().default('[]'),
   strengthsJson: text('strengths_json').notNull().default('[]'),
   answersJson: text('answers_json').notNull().default('[]'),
+  teacherScore: integer('teacher_score'),
+  teacherFeedback: text('teacher_feedback'),
   completedAt: timestamp('completed_at').defaultNow(),
 });
 
@@ -203,7 +207,9 @@ export const announcements = pgTable('announcements', {
   classroomId: integer('classroom_id').references(() => classrooms.id, { onDelete: 'cascade' }),
   senderUid: text('sender_uid').notNull(),
   senderName: text('sender_name').notNull(),
-  kind: text('kind').notNull().default('encouragement'), // homework | exam | video | encouragement | schedule
+  targetAudience: text('target_audience').notNull().default('classroom'), // classroom | all | teachers | parents
+  title: text('title'),
+  kind: text('kind').notNull().default('encouragement'), // homework | exam | video | encouragement | schedule | global
   message: text('message').notNull(),
   scheduledDate: text('scheduled_date'),
   createdAt: timestamp('created_at').defaultNow(),
