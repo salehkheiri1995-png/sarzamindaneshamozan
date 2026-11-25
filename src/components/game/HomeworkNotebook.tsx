@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { HomeworkItem, HomeworkQuestion } from '../../types/game';
 import { REALMS, BookId, formatPersianDigits } from '../../shared/curriculum';
+import { BadgeDefinition } from '../../shared/gamification';
 import { apiFetch } from '../../lib/api';
 import { soundEngine } from '../../lib/sound';
 import {
@@ -12,6 +13,10 @@ import {
   Upload,
   Plus,
   ArrowRight,
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
+  RotateCcw,
 } from 'lucide-react';
 
 interface HomeworkNotebookProps {
@@ -20,6 +25,7 @@ interface HomeworkNotebookProps {
   homeworks: HomeworkItem[];
   isDemoMode: boolean;
   onRefresh: () => void;
+  onBadgesUnlocked?: (badges: BadgeDefinition[]) => void;
 }
 
 export function HomeworkNotebook({
@@ -28,6 +34,7 @@ export function HomeworkNotebook({
   homeworks,
   isDemoMode,
   onRefresh,
+  onBadgesUnlocked,
 }: HomeworkNotebookProps) {
   const [activeHomework, setActiveHomework] = useState<HomeworkItem | null>(null);
   const [stepIndex, setStepIndex] = useState(0);
@@ -38,6 +45,7 @@ export function HomeworkNotebook({
   const [showStepFeedback, setShowStepFeedback] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [completedBanner, setCompletedBanner] = useState<string | null>(null);
+  const [expandedAnswerHwIds, setExpandedAnswerHwIds] = useState<Record<number, boolean>>({});
 
   // Quick Parent/Student Homework Creator + AI OCR Converter
   const [showCreator, setShowCreator] = useState(false);
@@ -188,18 +196,27 @@ export function HomeworkNotebook({
     if (!isDemoMode) {
       setSubmitting(true);
       try {
-        await apiFetch(`/api/homeworks/${activeHomework.id}/submit`, {
-          method: 'POST',
-          body: JSON.stringify({
-            studentId,
-            answers,
-            autoScore,
-          }),
-        });
+        const res = await apiFetch<{ newlyUnlockedBadges?: BadgeDefinition[] }>(
+          `/api/homeworks/${activeHomework.id}/submit`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              studentId,
+              answers,
+              autoScore,
+            }),
+          }
+        );
+        const isResubmission = Boolean(activeHomework.submission);
         soundEngine.playVictory();
         setCompletedBanner(
-          `تکلیف «${activeHomework.title}» با موفقیت انجام و برای والدین و معلم ثبت شد! (+۴۰ سکه طلا)`
+          isResubmission
+            ? `پاسخ‌های اصلاح‌شده تکلیف «${activeHomework.title}» دوباره ثبت و برای معلم ارسال شد! (+۱۰ XP)`
+            : `تکلیف «${activeHomework.title}» با موفقیت انجام و برای والدین و معلم ثبت شد! (+۴۰ سکه طلا)`
         );
+        if (res.newlyUnlockedBadges?.length && onBadgesUnlocked) {
+          onBadgesUnlocked(res.newlyUnlockedBadges);
+        }
         setActiveHomework(null);
         onRefresh();
       } catch (err) {
@@ -467,10 +484,17 @@ export function HomeworkNotebook({
           {homeworks.map((hw) => {
             const realm = REALMS.find((r) => r.bookId === hw.bookId) || REALMS[0];
             const isDone = Boolean(hw.submission);
+            const needsRevision = hw.submission?.status === 'needs_revision';
+            const submittedAnswers = hw.submission?.answers || [];
+            const isExpanded = Boolean(expandedAnswerHwIds[hw.id]);
             return (
               <div
                 key={hw.id}
-                className="rounded-2xl border border-[#E5DAC5] bg-white p-5 flex flex-col justify-between gap-4"
+                className={`rounded-2xl border p-5 flex flex-col justify-between gap-4 ${
+                  needsRevision
+                    ? 'border-amber-400 bg-amber-50/40'
+                    : 'border-[#E5DAC5] bg-white'
+                }`}
               >
                 <div className="space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold text-stone-500">
@@ -493,17 +517,77 @@ export function HomeworkNotebook({
                   <p className="text-xs font-medium text-teal-800">
                     اجرا در {realm.name} · {formatPersianDigits(hw.questions.length)} مأموریت تمرین
                   </p>
+
+                  {needsRevision && (
+                    <div className="rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-950 space-y-1">
+                      <p className="font-extrabold inline-flex items-center gap-1.5 text-amber-900">
+                        <AlertCircle className="h-4 w-4 shrink-0" />
+                        <span>نیازمند اصلاح و ارسال مجدد توسط معلم</span>
+                      </p>
+                      {hw.submission?.teacherFeedback && (
+                        <p className="font-semibold leading-relaxed">
+                          یادداشت معلم: {hw.submission.teacherFeedback}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {submittedAnswers.length > 0 && (
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedAnswerHwIds((prev) => ({ ...prev, [hw.id]: !isExpanded }))
+                        }
+                        className="inline-flex items-center gap-1 text-xs font-bold text-teal-800 hover:underline cursor-pointer"
+                      >
+                        <span>
+                          {isExpanded
+                            ? 'بستن پاسخ‌های ارسالی من'
+                            : `مشاهده پاسخ‌های ارسالی من (${formatPersianDigits(submittedAnswers.length)})`}
+                        </span>
+                        {isExpanded ? (
+                          <ChevronUp className="h-3.5 w-3.5" />
+                        ) : (
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                      {isExpanded && (
+                        <div className="mt-2 rounded-xl border border-[#EFE6D5] bg-[#FBF7EF] p-3 space-y-2 text-xs">
+                          {submittedAnswers.map((ans, aIdx) => (
+                            <div
+                              key={aIdx}
+                              className="flex items-start justify-between gap-2 border-b border-[#EFE6D5] pb-1.5 last:border-0 last:pb-0"
+                            >
+                              <div className="space-y-0.5">
+                                <p className="font-bold text-stone-900">{ans.promptText}</p>
+                                <p className="text-stone-600">پاسخ تو: {ans.studentAnswer}</p>
+                              </div>
+                              <span
+                                className={`font-bold shrink-0 ${
+                                  ans.isCorrect ? 'text-emerald-700' : 'text-rose-700'
+                                }`}
+                              >
+                                {ans.isCorrect ? 'درست' : 'نادرست'}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-between gap-3 border-t border-[#F1E8D8] pt-3.5">
                   {isDone ? (
                     <div className="text-xs font-bold text-emerald-800 space-y-0.5">
-                      <p>
-                        انجام‌شده · نمره خودکار: {formatPersianDigits(hw.submission!.autoScore)}٪
+                      <p className="tabular-nums">
+                        {needsRevision ? 'ارسال‌شده (نیازمند اصلاح)' : 'انجام‌شده'} · نمره خودکار:{' '}
+                        {formatPersianDigits(hw.submission!.autoScore)}٪
                         {hw.submission!.teacherScore !== null &&
                           ` · نمره معلم: ${formatPersianDigits(hw.submission!.teacherScore)} از ۲۰`}
                       </p>
-                      {hw.submission!.teacherFeedback && (
+                      {!needsRevision && hw.submission!.teacherFeedback && (
                         <p className="text-stone-600 font-medium">
                           بازخورد معلم: {hw.submission!.teacherFeedback}
                         </p>
@@ -516,10 +600,24 @@ export function HomeworkNotebook({
                   <button
                     type="button"
                     onClick={() => startHomeworkMission(hw)}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 px-4 py-2 text-sm font-bold text-white cursor-pointer whitespace-nowrap"
+                    className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-bold text-white cursor-pointer whitespace-nowrap ${
+                      needsRevision
+                        ? 'bg-amber-600 hover:bg-amber-700'
+                        : 'bg-teal-700 hover:bg-teal-800'
+                    }`}
                   >
-                    <Play className="h-4 w-4" />
-                    <span>{isDone ? 'مرور مجدد' : 'شروع مأموریت تکلیف'}</span>
+                    {needsRevision ? (
+                      <RotateCcw className="h-4 w-4" />
+                    ) : (
+                      <Play className="h-4 w-4" />
+                    )}
+                    <span>
+                      {needsRevision
+                        ? 'اصلاح و ارسال مجدد'
+                        : isDone
+                          ? 'مرور مجدد'
+                          : 'شروع مأموریت تکلیف'}
+                    </span>
                   </button>
                 </div>
               </div>

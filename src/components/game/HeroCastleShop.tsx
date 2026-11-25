@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { StudentProfile } from '../../context/AuthContext';
 import { SHOP_ITEMS, ShopItem, formatPersianDigits } from '../../shared/curriculum';
+import { BadgeDefinition } from '../../shared/gamification';
 import { HeroAvatarSvg } from './HeroAvatarSvg';
+import { BadgeShowcase } from './BadgeShowcase';
 import { apiFetch } from '../../lib/api';
 import { soundEngine } from '../../lib/sound';
 import { Gift, Check, Coins, ShieldAlert, PlayCircle } from 'lucide-react';
@@ -11,6 +13,7 @@ interface HeroCastleShopProps {
   rewardedChestsToday: number;
   isDemoMode: boolean;
   onStudentUpdate: (updated: StudentProfile) => void;
+  onBadgesUnlocked?: (badges: BadgeDefinition[]) => void;
   onRefresh: () => void;
 }
 
@@ -19,6 +22,7 @@ export function HeroCastleShop({
   rewardedChestsToday,
   isDemoMode,
   onStudentUpdate,
+  onBadgesUnlocked,
   onRefresh,
 }: HeroCastleShopProps) {
   const [filter, setFilter] = useState<'all' | 'outfit' | 'pet' | 'decor'>('all');
@@ -31,6 +35,13 @@ export function HeroCastleShop({
 
   const ownedItems: string[] = JSON.parse(student.ownedItems || '[]');
   const castleDecor: string[] = JSON.parse(student.castleDecor || '[]');
+  const earnedBadges: string[] = (() => {
+    try {
+      return JSON.parse(student.earnedBadges || '[]');
+    } catch {
+      return [];
+    }
+  })();
 
   const handleBuyOrEquip = async (item: ShopItem) => {
     setMessage(null);
@@ -64,7 +75,10 @@ export function HeroCastleShop({
     setBusyItem(item.id);
     try {
       if (!isOwned) {
-        const res = await apiFetch<{ student: StudentProfile }>(
+        const res = await apiFetch<{
+          student: StudentProfile;
+          newlyUnlockedBadges?: BadgeDefinition[];
+        }>(
           `/api/students/${student.id}/shop/buy`,
           {
             method: 'POST',
@@ -73,6 +87,9 @@ export function HeroCastleShop({
         );
         soundEngine.playCoin();
         onStudentUpdate(res.student);
+        if (res.newlyUnlockedBadges?.length) {
+          onBadgesUnlocked?.(res.newlyUnlockedBadges);
+        }
         setMessage(`آفرین! «${item.name}» به کلکسیون تو اضافه شد.`);
       } else {
         const body: Record<string, unknown> = {};
@@ -379,6 +396,9 @@ export function HeroCastleShop({
           })}
         </div>
       </section>
+
+      {/* Hero Trophy & Badge Showcase */}
+      <BadgeShowcase earnedIds={earnedBadges} title="تالار نشان‌ها و افتخارات قلعه" />
 
       {/* Non-educational child-safe banner slot note (Strictly only in Shop, never in missions/exams!) */}
       {student.allowOptionalAds !== false && (

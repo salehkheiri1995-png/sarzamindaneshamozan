@@ -36,6 +36,8 @@ export interface MissionItem {
   explanation: string;
   contentSource: string;
   reviewStatus: string;
+  classroomId?: number | null;
+  classroomName?: string | null;
   completed?: boolean;
 }
 
@@ -71,6 +73,11 @@ export interface HomeworkSubmissionItem {
   teacherScore: number | null;
   teacherFeedback: string | null;
   status: 'submitted' | 'graded' | 'needs_revision';
+  answers?: Array<{
+    promptText: string;
+    studentAnswer: string;
+    isCorrect: boolean;
+  }>;
   submittedAt: string;
 }
 
@@ -129,6 +136,17 @@ export interface ExamAttemptItem {
   durationSeconds: number;
   teacherScore?: number | null;
   teacherFeedback?: string | null;
+  wrongTopics?: string[];
+  strengths?: string[];
+  gradedAnswers?: Array<{
+    id: string;
+    promptText: string;
+    selected: string;
+    correctAnswer: string;
+    explanation: string;
+    topicId: string;
+    isCorrect: boolean;
+  }>;
   wrongTopicsJson: string;
   strengthsJson: string;
   answersJson: string;
@@ -189,4 +207,43 @@ export interface StudentWorldData {
   announcements: AnnouncementItem[];
   globalAnnouncements: AnnouncementItem[];
   rewardedChestsToday: number;
+}
+
+export interface NotificationItem {
+  id: number;
+  recipientUid: string | null;
+  studentId: number | null;
+  role: 'student' | 'parent' | 'teacher' | 'admin';
+  title: string;
+  body: string;
+  type: 'homework' | 'exam' | 'feedback' | 'approval' | 'announcement' | 'badge';
+  isRead: boolean;
+  createdAt: string;
+}
+
+export interface LeaderboardEntry {
+  rank: number;
+  nickname: string;
+  heroClass: string;
+  avatarColor: string;
+  xp: number;
+  isSelf: boolean;
+}
+
+export interface LeaderboardClassroom {
+  classroomId: number;
+  classroomName: string;
+  gradeId: number;
+  rankings: LeaderboardEntry[];
+}
+
+export interface AdaptivePracticeData {
+  weakTopics: string[];
+  missions: MissionItem[];
+}
+
+export interface StructuredAiReport {
+  strengths: string[];
+  needsPractice: string[];
+  nextWeekPlan: string[];
 }

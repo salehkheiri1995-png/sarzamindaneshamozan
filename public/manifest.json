@@ -1,0 +1,41 @@
+{
+  "id": "/",
+  "name": "سرزمین دانش‌آموزان قهرمان",
+  "short_name": "سرزمین دانش",
+  "description": "بازی آموزشی تعاملی دوره ابتدایی ایران با مأموریت‌های داستانی، تمرین هوشمند، کارنامه و پنل والدین و معلم",
+  "dir": "rtl",
+  "lang": "fa",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#FBF7EF",
+  "background_color": "#FBF7EF",
+  "categories": ["education", "games", "kids"],
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

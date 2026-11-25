@@ -14,6 +14,7 @@ import { ImagePlus, Trash2, Gamepad2, CheckCircle2 } from 'lucide-react';
 
 interface ManualQuestionBuilderProps {
   isAdmin?: boolean;
+  classrooms?: Array<{ id: number; name: string; gradeId: number }>;
   onCreated: (message: string) => void;
   onError: (error: string) => void;
 }
@@ -34,9 +35,11 @@ const ALL_GAME_TYPES: QuestionType[] = [
 
 export function ManualQuestionBuilder({
   isAdmin = false,
+  classrooms = [],
   onCreated,
   onError,
 }: ManualQuestionBuilderProps) {
+  const [selectedClassId, setSelectedClassId] = useState<number | ''>('');
   const [gradeId, setGradeId] = useState(3);
   const [bookId, setBookId] = useState<BookId>('math');
   const [chapterId, setChapterId] = useState('فصل ۲');
@@ -264,10 +267,12 @@ export function ManualQuestionBuilder({
 
     setSubmitting(true);
     try {
-      const effectivePublishNow = isAdmin && publishNow;
+      const targetClassId = selectedClassId ? Number(selectedClassId) : null;
+      const effectivePublishNow = Boolean(targetClassId) || (isAdmin && publishNow);
       await apiFetch('/api/teacher/questions', {
         method: 'POST',
         body: JSON.stringify({
+          classroomId: targetClassId,
           gradeId,
           bookId,
           chapterId: chapterId.trim() || 'فصل کلاسی',
@@ -296,9 +301,11 @@ export function ManualQuestionBuilder({
       setOpt3('');
       setOpt4('');
       onCreated(
-        effectivePublishNow
-          ? 'سؤال/بازی جدید ساخته شد و بلافاصله در سرزمین پایه مربوطه منتشر گردید!'
-          : 'سؤال/بازی جدید با وضعیت «در صف بررسی» ثبت شد و پس از تأیید مدیر کل در بازی دانش‌آموزان فعال می‌گردد.'
+        targetClassId
+          ? 'سؤال/بازی جدید ساخته شد و بلافاصله برای دانش‌آموزان کلاس منتشر گردید!'
+          : effectivePublishNow
+            ? 'سؤال/بازی جدید ساخته شد و بلافاصله در سرزمین پایه مربوطه منتشر گردید!'
+            : 'سؤال/بازی جدید با وضعیت «در صف بررسی» ثبت شد و پس از تأیید مدیر کل در بازی دانش‌آموزان فعال می‌گردد.'
       );
     } catch (err) {
       onError(err instanceof Error ? err.message : 'ثبت سؤال جدید با خطا مواجه شد.');
@@ -326,14 +333,39 @@ export function ManualQuestionBuilder({
         </span>
       </div>
 
-      {/* Row 1: Grade, Book, Game Type, Difficulty */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      {/* Row 1: Target Classroom (optional), Grade, Book, Game Type, Difficulty */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        {classrooms.length > 0 && (
+          <div>
+            <label className="block text-xs font-bold text-stone-700 mb-1">مخاطب / کلاس هدف</label>
+            <select
+              value={selectedClassId}
+              onChange={(e) => {
+                const nextId = e.target.value ? Number(e.target.value) : '';
+                setSelectedClassId(nextId);
+                if (nextId !== '') {
+                  const cls = classrooms.find((c) => c.id === nextId);
+                  if (cls) setGradeId(cls.gradeId);
+                }
+              }}
+              className="w-full rounded-xl border border-teal-300 bg-teal-50/40 px-3 py-2.5 text-sm font-bold text-stone-900"
+            >
+              <option value="">عمومی پایه (صف تأیید مدیر)</option>
+              {classrooms.map((c) => (
+                <option key={c.id} value={c.id}>
+                  کلاس {c.name} (انتشار مستقیم)
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div>
           <label className="block text-xs font-bold text-stone-700 mb-1">پایه تحصیلی</label>
           <select
             value={gradeId}
+            disabled={selectedClassId !== ''}
             onChange={(e) => setGradeId(Number(e.target.value))}
-            className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 text-sm font-bold"
+            className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 text-sm font-bold disabled:bg-stone-100"
           >
             {GRADES.map((g) => (
               <option key={g.id} value={g.id}>
@@ -722,7 +754,11 @@ export function ManualQuestionBuilder({
 
       {/* Footer Submit */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        {isAdmin ? (
+        {selectedClassId !== '' ? (
+          <p className="text-xs font-semibold text-teal-800">
+            این سؤال بلافاصله برای دانش‌آموزان کلاس منتخب منتشر می‌شود و پاسخ‌های آنان به شما برمی‌گردد.
+          </p>
+        ) : isAdmin ? (
           <label className="inline-flex items-center gap-2 text-xs font-bold text-stone-700 cursor-pointer">
             <input
               type="checkbox"
@@ -734,7 +770,7 @@ export function ManualQuestionBuilder({
           </label>
         ) : (
           <p className="text-xs font-semibold text-amber-800">
-            سؤال شما با وضعیت «در صف بررسی» ثبت می‌شود و بلافاصله پس از تأیید مدیر کل در بازی دانش‌آموزان فعال خواهد شد.
+            سؤال‌های عمومی با وضعیت «در صف بررسی» ثبت می‌شوند؛ اگر کلاس هدف را انتخاب کنید، بلافاصله در آن کلاس منتشر می‌شود.
           </p>
         )}
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { motion } from 'motion/react';
 import { MissionItem } from '../../types/game';
 import {
   DIFFICULTY_LABELS,
@@ -8,6 +9,7 @@ import {
 } from '../../shared/curriculum';
 import { soundEngine } from '../../lib/sound';
 import { apiFetch } from '../../lib/api';
+import { ConfettiBurst } from './ConfettiBurst';
 import {
   ArrowRight,
   Lightbulb,
@@ -18,11 +20,24 @@ import {
   HelpCircle,
 } from 'lucide-react';
 
+const PRAISE_MESSAGES = [
+  'آفرین قهرمان! معرکه بودی و مأموریت را کامل فتح کردی!',
+  'فوق‌العاده! هوش و دقت تو این مرحله را مثل برق حل کرد!',
+  'درخشان بودی! یک ستاره طلایی دیگر به افتخارات تو اضافه شد!',
+  'عالی عمل کردی! همین‌طور پرانرژی به پیش برو!',
+];
+
+const ENCOURAGE_MESSAGES = [
+  'تلاش عالی بود! اشتباه کردن یعنی داری چیز تازه‌ای یاد می‌گیری.',
+  'خیلی نزدیک بودی! بیا با هم نکته درستش را مرور کنیم و دوباره امتحان کن.',
+  'آفرین به پشتکارت! یک نگاه به راهنما بنداز و دوباره بزن.',
+];
+
 interface MissionPlayerProps {
   mission: MissionItem;
   gradeId: number;
   isDemoMode: boolean;
-  onComplete: (result: { isCorrect: boolean; durationSeconds: number }) => void;
+  onComplete: (result: { isCorrect: boolean; durationSeconds: number; studentAnswer: string }) => void;
   onExit: () => void;
   onNextMission?: () => void;
 }
@@ -177,7 +192,7 @@ export function MissionPlayer({
       soundEngine.playWrong();
     }
 
-    onComplete({ isCorrect: correct, durationSeconds });
+    onComplete({ isCorrect: correct, durationSeconds, studentAnswer: normalizedGot });
   };
 
   const handleFlipMemoryCard = (card: MemoryCard) => {
@@ -351,7 +366,19 @@ export function MissionPlayer({
 
       {/* Main Playfield — Zero Ads, High Focus */}
       <main className="mx-auto w-full max-w-4xl flex-1 px-4 sm:px-8 py-6 sm:py-8 space-y-6">
-        <section className="rounded-2xl border border-[#E5DAC5] bg-white p-5 sm:p-7">
+        <motion.section
+          key={mission.id}
+          animate={
+            submitted && !isCorrect
+              ? { x: [0, -8, 8, -5, 5, 0] }
+              : submitted && isCorrect
+                ? { scale: [1, 1.01, 1] }
+                : { x: 0, scale: 1 }
+          }
+          transition={{ duration: 0.42 }}
+          className="relative rounded-2xl border border-[#E5DAC5] bg-white p-5 sm:p-7"
+        >
+          <ConfettiBurst active={submitted && isCorrect} />
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold text-stone-500">
             <span>{QUESTION_TYPE_LABELS[mission.questionType] || mission.questionType}</span>
             <span>هدف آموزشی: {mission.learningObjective}</span>
@@ -928,11 +955,14 @@ export function MissionPlayer({
               </button>
             </div>
           )}
-        </section>
+        </motion.section>
 
         {/* Immediate Feedback, Reward & AI Tutor Explanation */}
         {submitted && (
-          <section
+          <motion.section
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.25 }}
             className={`rounded-2xl border p-6 space-y-4 ${
               isCorrect
                 ? 'border-emerald-300 bg-emerald-50/70'
@@ -949,8 +979,8 @@ export function MissionPlayer({
                 <div>
                   <h3 className="text-lg font-extrabold text-stone-900">
                     {isCorrect
-                      ? 'آفرین قهرمان! مأموریت با موفقیت کامل شد!'
-                      : 'تلاش عالی بود! بیا با هم نکته درستش را یاد بگیریم.'}
+                      ? PRAISE_MESSAGES[mission.id % PRAISE_MESSAGES.length]
+                      : ENCOURAGE_MESSAGES[mission.id % ENCOURAGE_MESSAGES.length]}
                   </h3>
                   <p className="text-sm font-semibold text-stone-700 tabular-nums">
                     {isCorrect
@@ -998,13 +1028,19 @@ export function MissionPlayer({
                   type="button"
                   disabled={aiLoading}
                   onClick={handleAskAiTutor}
-                  className="inline-flex items-center gap-2 rounded-xl border border-indigo-300 bg-white hover:bg-indigo-50 px-4 py-2.5 text-sm font-bold text-indigo-900 transition-colors cursor-pointer"
+                  className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-colors cursor-pointer ${
+                    !isCorrect
+                      ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm'
+                      : 'border border-indigo-300 bg-white hover:bg-indigo-50 text-indigo-900'
+                  }`}
                 >
-                  <Sparkles className="h-4 w-4 text-indigo-600" />
+                  <Sparkles className="h-4 w-4" />
                   <span>
                     {aiLoading
                       ? 'معلم هوشمند در حال آماده کردن توضیح ساده...'
-                      : 'توضیح بیشتر و مثال تازه از معلم هوشمند'}
+                      : !isCorrect
+                        ? 'چرا اشتباه شد؟ (توضیح معلم هوشمند)'
+                        : 'توضیح بیشتر و مثال تازه از معلم هوشمند'}
                   </span>
                 </button>
               )}
@@ -1016,7 +1052,7 @@ export function MissionPlayer({
                 </div>
               )}
             </div>
-          </section>
+          </motion.section>
         )}
       </main>
     </div>

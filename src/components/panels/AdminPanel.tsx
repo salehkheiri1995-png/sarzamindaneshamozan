@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { apiFetch } from '../../lib/api';
+import { useToast } from '../../context/ToastContext';
 import {
   GRADES,
   QUESTION_TYPE_LABELS,
@@ -7,6 +8,7 @@ import {
   formatPersianDigits,
 } from '../../shared/curriculum';
 import { soundEngine } from '../../lib/sound';
+import { SkeletonLoader } from '../common/SkeletonLoader';
 import { ManualQuestionBuilder } from './ManualQuestionBuilder';
 import {
   ShieldCheck,
@@ -30,6 +32,8 @@ import {
   Megaphone,
   ChevronDown,
   ChevronUp,
+  Database,
+  Clock,
 } from 'lucide-react';
 
 interface AdminUserRow {
@@ -143,14 +147,18 @@ const USERS_PER_PAGE = 10;
 const CONTENT_PER_PAGE = 15;
 
 export function AdminPanel() {
+  const { showToast } = useToast();
   const [tab, setTab] = useState<'overview' | 'users' | 'students_classes' | 'content_ads'>('overview');
   const [data, setData] = useState<AdminOverviewData | null>(null);
+  const [dbHealth, setDbHealth] = useState<{ ok: boolean; db: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
   // Filters, search & pagination
-  const [userRoleFilter, setUserRoleFilter] = useState<'all' | 'parent' | 'teacher' | 'admin'>('all');
+  const [userRoleFilter, setUserRoleFilter] = useState<
+    'all' | 'pending' | 'parent' | 'teacher' | 'admin'
+  >('all');
   const [userSearch, setUserSearch] = useState('');
   const [userPage, setUserPage] = useState(1);
 
@@ -184,8 +192,15 @@ export function AdminPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await apiFetch<AdminOverviewData>('/api/admin/overview');
-      setData(res);
+      const [overviewRes, healthRes] = await Promise.all([
+        apiFetch<AdminOverviewData>('/api/admin/overview'),
+        apiFetch<{ ok: boolean; db: string }>('/api/health').catch(() => ({
+          ok: false,
+          db: 'disconnected',
+        })),
+      ]);
+      setData(overviewRes);
+      setDbHealth(healthRes);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'دسترسی به پنل مدیریت امکان‌پذیر نیست.');
     } finally {
@@ -207,20 +222,25 @@ export function AdminPanel() {
         body: JSON.stringify({ approved }),
       });
       soundEngine.playCorrect();
-      if (isParent) {
-        setStatusMsg(approved ? 'حساب والدین با موفقیت تأیید شد.' : 'تأیید حساب والدین لغو شد.');
-      } else {
-        setStatusMsg(approved ? 'حساب معلم با موفقیت تأیید شد.' : 'دسترسی معلمی لغو شد.');
-      }
+      const msg = isParent
+        ? approved
+          ? 'حساب والدین با موفقیت تأیید شد.'
+          : 'تأیید حساب والدین لغو شد.'
+        : approved
+          ? 'حساب معلم با موفقیت تأیید شد.'
+          : 'دسترسی معلمی لغو شد.';
+      setStatusMsg(msg);
+      showToast(msg, 'success');
       load();
     } catch (err) {
-      setError(
+      const msg =
         err instanceof Error
           ? err.message
           : isParent
             ? 'بروزرسانی وضعیت والدین ناموفق بود.'
-            : 'بروزرسانی وضعیت معلم ناموفق بود.'
-      );
+            : 'بروزرسانی وضعیت معلم ناموفق بود.';
+      setError(msg);
+      showToast(msg, 'error');
     }
   };
 
@@ -233,12 +253,14 @@ export function AdminPanel() {
         body: JSON.stringify({ role: nextRole }),
       });
       soundEngine.playCorrect();
-      setStatusMsg(
-        `نقش کاربر «${displayName}» به «${nextRole === 'parent' ? 'والدین' : 'معلم'}» تغییر یافت.`
-      );
+      const msg = `نقش کاربر «${displayName}» به «${nextRole === 'parent' ? 'والدین' : 'معلم'}» تغییر یافت.`;
+      setStatusMsg(msg);
+      showToast(msg, 'success');
       load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'تغییر نقش کاربر ناموفق بود.');
+      const msg = err instanceof Error ? err.message : 'تغییر نقش کاربر ناموفق بود.';
+      setError(msg);
+      showToast(msg, 'error');
     }
   };
 
@@ -251,10 +273,14 @@ export function AdminPanel() {
         body: JSON.stringify({ isActive }),
       });
       soundEngine.playClick();
-      setStatusMsg(isActive ? 'کلاس فعال شد.' : 'کلاس غیرفعال شد.');
+      const msg = isActive ? 'کلاس فعال شد.' : 'کلاس غیرفعال شد.';
+      setStatusMsg(msg);
+      showToast(msg, 'info');
       load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'تغییر وضعیت کلاس ناموفق بود.');
+      const msg = err instanceof Error ? err.message : 'تغییر وضعیت کلاس ناموفق بود.';
+      setError(msg);
+      showToast(msg, 'error');
     }
   };
 
@@ -271,10 +297,17 @@ export function AdminPanel() {
         body: JSON.stringify({ reviewStatus, rejectionReason }),
       });
       soundEngine.playClick();
-      setStatusMsg(reviewStatus === 'approved' ? 'محتوا تأیید و منتشر شد.' : 'محتوا رد شد و علت رد برای معلم ثبت گردید.');
+      const msg =
+        reviewStatus === 'approved'
+          ? 'محتوا تأیید و منتشر شد.'
+          : 'محتوا رد شد و علت رد برای معلم ثبت گردید.';
+      setStatusMsg(msg);
+      showToast(msg, reviewStatus === 'approved' ? 'success' : 'info');
       load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'بررسی محتوا ناموفق بود.');
+      const msg = err instanceof Error ? err.message : 'بررسی محتوا ناموفق بود.';
+      setError(msg);
+      showToast(msg, 'error');
     }
   };
 
@@ -315,10 +348,14 @@ export function AdminPanel() {
       setAnnTitle('');
       setAnnDate('');
       setAnnMessage('');
-      setStatusMsg('اطلاعیه سراسری با موفقیت ثبت و در پنل مخاطبان منتشر شد.');
+      const msg = 'اطلاعیه سراسری با موفقیت ثبت و در پنل مخاطبان منتشر شد.';
+      setStatusMsg(msg);
+      showToast(msg, 'success');
       load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'ارسال اطلاعیه سراسری ناموفق بود.');
+      const msg = err instanceof Error ? err.message : 'ارسال اطلاعیه سراسری ناموفق بود.';
+      setError(msg);
+      showToast(msg, 'error');
     } finally {
       setAnnBusy(false);
     }
@@ -347,33 +384,41 @@ export function AdminPanel() {
       if (confirmState.kind === 'delete_content') {
         await apiFetch(`/api/admin/content/${confirmState.item.id}`, { method: 'DELETE' });
         soundEngine.playClick();
-        setStatusMsg('آیتم از بانک محتوا حذف شد.');
+        const msg = 'آیتم از بانک محتوا حذف شد.';
+        setStatusMsg(msg);
+        showToast(msg, 'info');
       } else if (confirmState.kind === 'delete_user') {
         await apiFetch(`/api/admin/users/${confirmState.user.uid}`, { method: 'DELETE' });
         soundEngine.playClick();
-        setStatusMsg(`حساب کاربری «${confirmState.user.displayName}» حذف شد.`);
+        const msg = `حساب کاربری «${confirmState.user.displayName}» حذف شد.`;
+        setStatusMsg(msg);
+        showToast(msg, 'info');
       } else if (confirmState.kind === 'toggle_user_status') {
         await apiFetch(`/api/admin/users/${confirmState.user.uid}/status`, {
           method: 'PATCH',
           body: JSON.stringify({ isActive: confirmState.nextActive }),
         });
         soundEngine.playClick();
-        setStatusMsg(
-          confirmState.nextActive
-            ? `حساب کاربری «${confirmState.user.displayName}» دوباره فعال شد.`
-            : `حساب کاربری «${confirmState.user.displayName}» غیرفعال شد.`
-        );
+        const msg = confirmState.nextActive
+          ? `حساب کاربری «${confirmState.user.displayName}» دوباره فعال شد.`
+          : `حساب کاربری «${confirmState.user.displayName}» غیرفعال شد.`;
+        setStatusMsg(msg);
+        showToast(msg, 'info');
       } else if (confirmState.kind === 'delete_announcement') {
         await apiFetch(`/api/admin/announcements/${confirmState.announcement.id}`, {
           method: 'DELETE',
         });
         soundEngine.playClick();
-        setStatusMsg('اطلاعیه سراسری حذف شد.');
+        const msg = 'اطلاعیه سراسری حذف شد.';
+        setStatusMsg(msg);
+        showToast(msg, 'info');
       }
       setConfirmState(null);
       load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'اجرای عملیات با خطا مواجه شد.');
+      const msg = err instanceof Error ? err.message : 'اجرای عملیات با خطا مواجه شد.';
+      setError(msg);
+      showToast(msg, 'error');
     } finally {
       setConfirmBusy(false);
     }
@@ -383,7 +428,11 @@ export function AdminPanel() {
     if (!data) return [];
     const q = userSearch.trim().toLowerCase();
     return data.users.filter((u) => {
-      if (userRoleFilter !== 'all' && u.role !== userRoleFilter) return false;
+      if (userRoleFilter === 'pending') {
+        if (u.role === 'admin' || u.teacherApproved) return false;
+      } else if (userRoleFilter !== 'all' && u.role !== userRoleFilter) {
+        return false;
+      }
       if (!q) return true;
       return (
         u.displayName.toLowerCase().includes(q) ||
@@ -425,7 +474,7 @@ export function AdminPanel() {
   );
 
   if (loading && !data) {
-    return <p className="text-sm font-semibold text-stone-600">در حال بارگذاری پنل مدیریت مرکزی...</p>;
+    return <SkeletonLoader variant="panel" />;
   }
 
   if (error && !data) {
@@ -437,6 +486,8 @@ export function AdminPanel() {
   }
 
   if (!data) return null;
+
+  const pendingUsersCount = data.users.filter((u) => u.role !== 'admin' && !u.teacherApproved).length;
 
   const maxGradeContent = Math.max(1, ...data.contentByGrade.map((g) => g.total));
 
@@ -451,6 +502,22 @@ export function AdminPanel() {
               کنترل کاربران، تأیید والدین و معلمان، تغییر نقش، مدیریت کلاس‌ها، بانک محتوا و تبلیغات کودک‌ایمن
             </p>
           </div>
+        </div>
+
+        {/* Live PostgreSQL Health Status */}
+        <div
+          className={`inline-flex items-center gap-2 rounded-xl border px-3.5 py-2 text-xs font-extrabold whitespace-nowrap ${
+            dbHealth?.ok
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+              : 'border-rose-200 bg-rose-50 text-rose-900'
+          }`}
+        >
+          <Database className={`h-4 w-4 ${dbHealth?.ok ? 'text-emerald-700' : 'text-rose-700'}`} />
+          <span>
+            {dbHealth?.ok
+              ? 'متصل به پایگاه داده PostgreSQL (Cloud SQL)'
+              : 'وضعیت اتصال پایگاه داده نامشخص'}
+          </span>
         </div>
       </div>
 
@@ -503,22 +570,102 @@ export function AdminPanel() {
       {/* TAB 1: OVERVIEW */}
       {tab === 'overview' && (
         <div className="space-y-6">
-          <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-            {[
-              ['کاربران کل', data.stats.usersCount],
-              ['پروفایل دانش‌آموز', data.stats.studentCount],
-              ['کلاس‌های ثبت‌شده', data.stats.classCount],
-              ['مأموریت‌های حل‌شده', data.stats.attemptCount],
-              ['آزمون‌های برگزارشده', data.stats.examAttemptCount],
-              ['در صف تأیید محتوا', data.stats.pendingReviewCount],
-            ].map(([label, val]) => (
-              <div key={String(label)} className="rounded-2xl border border-[#E5DAC5] bg-white p-4">
-                <p className="text-xs font-semibold text-stone-500">{label}</p>
-                <p className="mt-1 text-2xl font-extrabold text-stone-900 tabular-nums">
-                  {formatPersianDigits(val as number)}
-                </p>
-              </div>
-            ))}
+          <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3.5">
+            <button
+              type="button"
+              onClick={() => {
+                setTab('users');
+                setUserRoleFilter('all');
+                setUserPage(1);
+              }}
+              className="rounded-2xl border border-[#E5DAC5] bg-white hover:border-amber-400 p-4 text-right transition-colors cursor-pointer"
+            >
+              <p className="text-xs font-semibold text-stone-500">کاربران کل</p>
+              <p className="mt-1 text-2xl font-extrabold text-stone-900 tabular-nums">
+                {formatPersianDigits(data.stats.usersCount)}
+              </p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                soundEngine.playClick();
+                setTab('users');
+                setUserRoleFilter('pending');
+                setUserPage(1);
+              }}
+              className={`rounded-2xl border p-4 text-right transition-colors cursor-pointer ${
+                pendingUsersCount > 0
+                  ? 'border-amber-300 bg-amber-50/70 hover:bg-amber-50'
+                  : 'border-[#E5DAC5] bg-white hover:border-amber-400'
+              }`}
+            >
+              <p className="text-xs font-bold text-amber-900 flex items-center gap-1">
+                <Clock className="h-3.5 w-3.5" />
+                <span>در انتظار تأیید حساب</span>
+              </p>
+              <p className="mt-1 text-2xl font-extrabold text-amber-800 tabular-nums">
+                {formatPersianDigits(pendingUsersCount)}
+              </p>
+              <p className="mt-0.5 text-[10px] font-bold text-amber-700">کلیک برای بررسی فوری</p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setTab('students_classes')}
+              className="rounded-2xl border border-[#E5DAC5] bg-white hover:border-amber-400 p-4 text-right transition-colors cursor-pointer"
+            >
+              <p className="text-xs font-semibold text-stone-500">پروفایل دانش‌آموز</p>
+              <p className="mt-1 text-2xl font-extrabold text-stone-900 tabular-nums">
+                {formatPersianDigits(data.stats.studentCount)}
+              </p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setTab('students_classes')}
+              className="rounded-2xl border border-[#E5DAC5] bg-white hover:border-amber-400 p-4 text-right transition-colors cursor-pointer"
+            >
+              <p className="text-xs font-semibold text-stone-500">کلاس‌های ثبت‌شده</p>
+              <p className="mt-1 text-2xl font-extrabold text-stone-900 tabular-nums">
+                {formatPersianDigits(data.stats.classCount)}
+              </p>
+            </button>
+
+            <div className="rounded-2xl border border-[#E5DAC5] bg-white p-4">
+              <p className="text-xs font-semibold text-stone-500">مأموریت‌های حل‌شده</p>
+              <p className="mt-1 text-2xl font-extrabold text-stone-900 tabular-nums">
+                {formatPersianDigits(data.stats.attemptCount)}
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-[#E5DAC5] bg-white p-4">
+              <p className="text-xs font-semibold text-stone-500">آزمون‌های برگزارشده</p>
+              <p className="mt-1 text-2xl font-extrabold text-stone-900 tabular-nums">
+                {formatPersianDigits(data.stats.examAttemptCount)}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                soundEngine.playClick();
+                setTab('content_ads');
+                setContentStatusFilter('pending_review');
+                setContentPage(1);
+              }}
+              className={`rounded-2xl border p-4 text-right transition-colors cursor-pointer ${
+                data.stats.pendingReviewCount > 0
+                  ? 'border-indigo-300 bg-indigo-50/70 hover:bg-indigo-50'
+                  : 'border-[#E5DAC5] bg-white hover:border-indigo-400'
+              }`}
+            >
+              <p className="text-xs font-bold text-indigo-900">در صف تأیید محتوا</p>
+              <p className="mt-1 text-2xl font-extrabold text-indigo-800 tabular-nums">
+                {formatPersianDigits(data.stats.pendingReviewCount)}
+              </p>
+              <p className="mt-0.5 text-[10px] font-bold text-indigo-700">کلیک برای بازبینی</p>
+            </button>
           </section>
 
           <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -811,10 +958,11 @@ export function AdminPanel() {
                 />
               </div>
 
-              <div className="flex items-center gap-1 rounded-xl bg-[#EFE6D5] p-1">
+              <div className="flex flex-wrap items-center gap-1 rounded-xl bg-[#EFE6D5] p-1">
                 {(
                   [
                     ['all', 'همه'],
+                    ['pending', 'در انتظار تأیید'],
                     ['teacher', 'معلمان'],
                     ['parent', 'والدین'],
                     ['admin', 'مدیران'],
@@ -827,7 +975,7 @@ export function AdminPanel() {
                       setUserRoleFilter(k);
                       setUserPage(1);
                     }}
-                    className={`rounded-lg px-3 py-1 text-xs font-bold cursor-pointer ${
+                    className={`rounded-lg px-3 py-1 text-xs font-bold cursor-pointer whitespace-nowrap ${
                       userRoleFilter === k ? 'bg-white text-stone-950 shadow-xs' : 'text-stone-700'
                     }`}
                   >
@@ -843,128 +991,225 @@ export function AdminPanel() {
               کاربری مطابق جستجو یا فیلتر انتخاب‌شده یافت نشد.
             </p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-right text-sm">
-                <thead>
-                  <tr className="border-b border-[#EFE6D5] text-xs text-stone-500">
-                    <th className="py-2.5 font-bold">نام</th>
-                    <th className="py-2.5 font-bold">نام کاربری / ایمیل</th>
-                    <th className="py-2.5 font-bold">نقش</th>
-                    <th className="py-2.5 font-bold">مدرسه</th>
-                    <th className="py-2.5 font-bold">وضعیت تأیید و حساب</th>
-                    <th className="py-2.5 font-bold">عملیات</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#F5EFE2]">
-                  {paginatedUsers.map((u) => {
-                    const isParent = u.role === 'parent';
-                    const isUserActive = u.isActive !== false;
-                    return (
-                      <tr key={u.uid} className={!isUserActive ? 'bg-stone-50/70 opacity-75' : ''}>
-                        <td className="py-3 font-bold text-stone-900">{u.displayName}</td>
-                        <td className="py-3 text-stone-600 font-mono text-xs">
-                          {u.username ? `@${u.username}` : u.email}
-                        </td>
-                        <td className="py-3">
-                          {u.role === 'admin' ? (
-                            <span className="font-bold text-indigo-800 text-xs">مدیر کل</span>
+            <>
+              {/* Mobile Card View */}
+              <div className="md:hidden space-y-3">
+                {paginatedUsers.map((u) => {
+                  const isParent = u.role === 'parent';
+                  const isUserActive = u.isActive !== false;
+                  return (
+                    <div
+                      key={u.uid}
+                      className={`rounded-2xl border border-[#EFE6D5] bg-[#FBF7EF] p-4 space-y-3 ${
+                        !isUserActive ? 'opacity-75' : ''
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="font-extrabold text-sm text-stone-900">{u.displayName}</p>
+                          <p className="text-xs font-mono text-stone-600 mt-0.5">
+                            {u.username ? `@${u.username}` : u.email}
+                          </p>
+                          {u.schoolName && (
+                            <p className="text-[11px] text-stone-500 mt-0.5">مدرسه: {u.schoolName}</p>
+                          )}
+                        </div>
+                        <div className="text-left text-xs font-bold">
+                          {u.role === 'admin' || u.teacherApproved ? (
+                            <span className="text-emerald-700">تأییدشده</span>
                           ) : (
-                            <select
-                              aria-label={`تغییر نقش ${u.displayName}`}
-                              value={u.role === 'teacher' ? 'teacher' : 'parent'}
-                              onChange={(e) =>
-                                changeUserRole(
-                                  u.uid,
-                                  e.target.value as 'parent' | 'teacher',
-                                  u.displayName
-                                )
-                              }
-                              className="rounded-lg border border-stone-300 bg-white px-2.5 py-1 text-xs font-bold text-stone-800 cursor-pointer"
-                            >
-                              <option value="parent">والدین</option>
-                              <option value="teacher">معلم</option>
-                            </select>
+                            <span className="text-amber-700">در انتظار تأیید</span>
                           )}
-                        </td>
-                        <td className="py-3 text-xs text-stone-600">{u.schoolName || '—'}</td>
-                        <td className="py-3 text-xs font-bold space-y-0.5">
-                          <div>
-                            {u.role === 'admin' || u.teacherApproved ? (
-                              <span className="text-emerald-700">تأییدشده</span>
+                          {!isUserActive && <div className="text-rose-700">غیرفعال</div>}
+                        </div>
+                      </div>
+
+                      {u.role === 'admin' ? (
+                        <span className="inline-block text-xs font-extrabold text-indigo-800">مدیر کل</span>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[#E5DAC5]">
+                          <select
+                            aria-label={`تغییر نقش ${u.displayName}`}
+                            value={u.role === 'teacher' ? 'teacher' : 'parent'}
+                            onChange={(e) =>
+                              changeUserRole(u.uid, e.target.value as 'parent' | 'teacher', u.displayName)
+                            }
+                            className="rounded-lg border border-stone-300 bg-white px-2.5 py-1.5 text-xs font-bold text-stone-800 cursor-pointer"
+                          >
+                            <option value="parent">والدین</option>
+                            <option value="teacher">معلم</option>
+                          </select>
+
+                          <button
+                            type="button"
+                            onClick={() => toggleUserApproval(u.uid, !u.teacherApproved, u.role)}
+                            className={`rounded-lg px-2.5 py-1.5 text-xs font-bold cursor-pointer whitespace-nowrap ${
+                              u.teacherApproved
+                                ? 'border border-amber-300 bg-white text-amber-800'
+                                : 'bg-emerald-700 text-white'
+                            }`}
+                          >
+                            {isParent
+                              ? u.teacherApproved
+                                ? 'لغو تأیید والدین'
+                                : 'تأیید به عنوان والدین'
+                              : u.teacherApproved
+                                ? 'لغو دسترسی معلم'
+                                : 'تأیید به عنوان معلم'}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setConfirmState({
+                                kind: 'toggle_user_status',
+                                user: u,
+                                nextActive: !isUserActive,
+                              })
+                            }
+                            className="rounded-lg border border-stone-300 bg-white px-2.5 py-1.5 text-xs font-bold text-stone-700 cursor-pointer"
+                          >
+                            {isUserActive ? 'غیرفعال' : 'فعال‌سازی'}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setConfirmState({ kind: 'delete_user', user: u })}
+                            className="rounded-lg border border-rose-300 bg-white px-2.5 py-1.5 text-xs font-bold text-rose-700 cursor-pointer"
+                          >
+                            حذف
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Desktop Sticky-Header Table View */}
+              <div className="hidden md:block overflow-x-auto max-h-[540px] overflow-y-auto">
+                <table className="w-full text-right text-sm">
+                  <thead className="sticky top-0 bg-white z-10">
+                    <tr className="border-b border-[#EFE6D5] text-xs text-stone-500">
+                      <th className="py-2.5 font-bold">نام</th>
+                      <th className="py-2.5 font-bold">نام کاربری / ایمیل</th>
+                      <th className="py-2.5 font-bold">نقش</th>
+                      <th className="py-2.5 font-bold">مدرسه</th>
+                      <th className="py-2.5 font-bold">وضعیت تأیید و حساب</th>
+                      <th className="py-2.5 font-bold">عملیات</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#F5EFE2]">
+                    {paginatedUsers.map((u) => {
+                      const isParent = u.role === 'parent';
+                      const isUserActive = u.isActive !== false;
+                      return (
+                        <tr key={u.uid} className={!isUserActive ? 'bg-stone-50/70 opacity-75' : ''}>
+                          <td className="py-3 font-bold text-stone-900">{u.displayName}</td>
+                          <td className="py-3 text-stone-600 font-mono text-xs">
+                            {u.username ? `@${u.username}` : u.email}
+                          </td>
+                          <td className="py-3">
+                            {u.role === 'admin' ? (
+                              <span className="font-bold text-indigo-800 text-xs">مدیر کل</span>
                             ) : (
-                              <span className="text-amber-700">در انتظار تأیید</span>
-                            )}
-                          </div>
-                          {!isUserActive && (
-                            <div className="text-rose-700 font-extrabold">حساب غیرفعال</div>
-                          )}
-                        </td>
-                        <td className="py-3">
-                          {u.role !== 'admin' && (
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => toggleUserApproval(u.uid, !u.teacherApproved, u.role)}
-                                className={`rounded-lg px-2.5 py-1.5 text-xs font-bold cursor-pointer whitespace-nowrap ${
-                                  u.teacherApproved
-                                    ? 'border border-amber-300 text-amber-800 hover:bg-amber-50'
-                                    : 'bg-emerald-700 text-white hover:bg-emerald-800'
-                                }`}
-                              >
-                                {isParent
-                                  ? u.teacherApproved
-                                    ? 'لغو تأیید والدین'
-                                    : 'تأیید به عنوان والدین'
-                                  : u.teacherApproved
-                                    ? 'لغو دسترسی معلم'
-                                    : 'تأیید به عنوان معلم'}
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setConfirmState({
-                                    kind: 'toggle_user_status',
-                                    user: u,
-                                    nextActive: !isUserActive,
-                                  })
+                              <select
+                                aria-label={`تغییر نقش ${u.displayName}`}
+                                value={u.role === 'teacher' ? 'teacher' : 'parent'}
+                                onChange={(e) =>
+                                  changeUserRole(
+                                    u.uid,
+                                    e.target.value as 'parent' | 'teacher',
+                                    u.displayName
+                                  )
                                 }
-                                className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-bold cursor-pointer whitespace-nowrap ${
-                                  isUserActive
-                                    ? 'border-stone-300 text-stone-700 hover:bg-stone-100'
-                                    : 'border-emerald-300 text-emerald-700 hover:bg-emerald-50'
-                                }`}
+                                className="rounded-lg border border-stone-300 bg-white px-2.5 py-1 text-xs font-bold text-stone-800 cursor-pointer"
                               >
-                                {isUserActive ? (
-                                  <>
-                                    <UserX className="h-3.5 w-3.5" />
-                                    <span>غیرفعال</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <UserCheck className="h-3.5 w-3.5" />
-                                    <span>فعال‌سازی</span>
-                                  </>
-                                )}
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => setConfirmState({ kind: 'delete_user', user: u })}
-                                className="inline-flex items-center gap-1 rounded-lg border border-rose-300 px-2.5 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-50 cursor-pointer whitespace-nowrap"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                                <span>حذف</span>
-                              </button>
+                                <option value="parent">والدین</option>
+                                <option value="teacher">معلم</option>
+                              </select>
+                            )}
+                          </td>
+                          <td className="py-3 text-xs text-stone-600">{u.schoolName || '—'}</td>
+                          <td className="py-3 text-xs font-bold space-y-0.5">
+                            <div>
+                              {u.role === 'admin' || u.teacherApproved ? (
+                                <span className="text-emerald-700">تأییدشده</span>
+                              ) : (
+                                <span className="text-amber-700">در انتظار تأیید</span>
+                              )}
                             </div>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                            {!isUserActive && (
+                              <div className="text-rose-700 font-extrabold">حساب غیرفعال</div>
+                            )}
+                          </td>
+                          <td className="py-3">
+                            {u.role !== 'admin' && (
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleUserApproval(u.uid, !u.teacherApproved, u.role)}
+                                  className={`rounded-lg px-2.5 py-1.5 text-xs font-bold cursor-pointer whitespace-nowrap ${
+                                    u.teacherApproved
+                                      ? 'border border-amber-300 text-amber-800 hover:bg-amber-50'
+                                      : 'bg-emerald-700 text-white hover:bg-emerald-800'
+                                  }`}
+                                >
+                                  {isParent
+                                    ? u.teacherApproved
+                                      ? 'لغو تأیید والدین'
+                                      : 'تأیید به عنوان والدین'
+                                    : u.teacherApproved
+                                      ? 'لغو دسترسی معلم'
+                                      : 'تأیید به عنوان معلم'}
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setConfirmState({
+                                      kind: 'toggle_user_status',
+                                      user: u,
+                                      nextActive: !isUserActive,
+                                    })
+                                  }
+                                  className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-bold cursor-pointer whitespace-nowrap ${
+                                    isUserActive
+                                      ? 'border-stone-300 text-stone-700 hover:bg-stone-100'
+                                      : 'border-emerald-300 text-emerald-700 hover:bg-emerald-50'
+                                  }`}
+                                >
+                                  {isUserActive ? (
+                                    <>
+                                      <UserX className="h-3.5 w-3.5" />
+                                      <span>غیرفعال</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <UserCheck className="h-3.5 w-3.5" />
+                                      <span>فعال‌سازی</span>
+                                    </>
+                                  )}
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmState({ kind: 'delete_user', user: u })}
+                                  className="inline-flex items-center gap-1 rounded-lg border border-rose-300 px-2.5 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-50 cursor-pointer whitespace-nowrap"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                  <span>حذف</span>
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
 
           {userTotalPages > 1 && (
@@ -1031,38 +1276,61 @@ export function AdminPanel() {
             {data.students.length === 0 ? (
               <p className="text-sm text-stone-500">هنوز پروفایل دانش‌آموزی ثبت نشده است.</p>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-right text-sm">
-                  <thead>
-                    <tr className="border-b border-[#EFE6D5] text-xs text-stone-500">
-                      <th className="py-2 font-bold">نام قهرمان</th>
-                      <th className="py-2 font-bold">نام کاربری</th>
-                      <th className="py-2 font-bold">پایه</th>
-                      <th className="py-2 font-bold">XP</th>
-                      <th className="py-2 font-bold">سکه</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#F5EFE2]">
-                    {data.students.map((st) => (
-                      <tr key={st.id}>
-                        <td className="py-2.5 font-bold text-stone-900">{st.nickname}</td>
-                        <td className="py-2.5 font-mono text-xs text-stone-600">
-                          {st.username ? `@${st.username}` : 'بدون رمز مستقل'}
-                        </td>
-                        <td className="py-2.5 text-xs font-bold text-stone-700">
-                          پایه {formatPersianDigits(st.gradeId)}
-                        </td>
-                        <td className="py-2.5 font-bold text-teal-800 tabular-nums">
-                          {formatPersianDigits(st.xp)}
-                        </td>
-                        <td className="py-2.5 font-bold text-amber-700 tabular-nums">
-                          {formatPersianDigits(st.coins)}
-                        </td>
+              <>
+                <div className="md:hidden space-y-2.5">
+                  {data.students.map((st) => (
+                    <div
+                      key={st.id}
+                      className="rounded-xl border border-[#EFE6D5] bg-[#FBF7EF] p-3.5 flex items-center justify-between gap-3"
+                    >
+                      <div>
+                        <p className="font-extrabold text-sm text-stone-900">{st.nickname}</p>
+                        <p className="text-xs text-stone-600 mt-0.5">
+                          پایه {formatPersianDigits(st.gradeId)} ·{' '}
+                          <span className="font-mono">{st.username ? `@${st.username}` : 'بدون رمز مستقل'}</span>
+                        </p>
+                      </div>
+                      <div className="text-left text-xs tabular-nums">
+                        <p className="font-extrabold text-teal-800">{formatPersianDigits(st.xp)} XP</p>
+                        <p className="font-bold text-amber-700">{formatPersianDigits(st.coins)} سکه</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="hidden md:block overflow-x-auto max-h-[480px] overflow-y-auto">
+                  <table className="w-full text-right text-sm">
+                    <thead className="sticky top-0 bg-white z-10">
+                      <tr className="border-b border-[#EFE6D5] text-xs text-stone-500">
+                        <th className="py-2 font-bold">نام قهرمان</th>
+                        <th className="py-2 font-bold">نام کاربری</th>
+                        <th className="py-2 font-bold">پایه</th>
+                        <th className="py-2 font-bold">XP</th>
+                        <th className="py-2 font-bold">سکه</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="divide-y divide-[#F5EFE2]">
+                      {data.students.map((st) => (
+                        <tr key={st.id}>
+                          <td className="py-2.5 font-bold text-stone-900">{st.nickname}</td>
+                          <td className="py-2.5 font-mono text-xs text-stone-600">
+                            {st.username ? `@${st.username}` : 'بدون رمز مستقل'}
+                          </td>
+                          <td className="py-2.5 text-xs font-bold text-stone-700">
+                            پایه {formatPersianDigits(st.gradeId)}
+                          </td>
+                          <td className="py-2.5 font-bold text-teal-800 tabular-nums">
+                            {formatPersianDigits(st.xp)}
+                          </td>
+                          <td className="py-2.5 font-bold text-amber-700 tabular-nums">
+                            {formatPersianDigits(st.coins)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </section>
 

@@ -14,6 +14,7 @@ import {
   sanitizeStudent,
   sanitizeUser,
 } from '../lib/server-helpers.ts';
+import { notifyAllAdmins } from '../lib/gamification.ts';
 
 export const authRouter = Router();
 
@@ -198,6 +199,12 @@ authRouter.post('/auth/register', registerRateLimiter, async (req, res) => {
       username,
       displayName: created.displayName,
     });
+
+    await notifyAllAdmins(
+      'ثبت‌نام کاربر جدید',
+      `${created.displayName} با نقش ${role === 'teacher' ? 'معلم' : 'والدین'} در سامانه ثبت‌نام کرد.`,
+      'approval'
+    );
 
     res.status(201).json({
       token,

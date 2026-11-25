@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import {
   adEvents,
+  aiReportCache,
   announcements,
   classroomEnrollments,
   classrooms,
@@ -20,6 +21,17 @@ import { ensureCurriculumSeeded } from '../db/seed.ts';
 import { requireAuth, AuthRequest } from '../middleware/auth.ts';
 import { hashPassword } from '../lib/auth-crypto.ts';
 import { SHOP_ITEMS, BookId } from '../shared/curriculum.ts';
+import { normalizeDailyQuestState } from '../shared/gamification.ts';
+import {
+  computeUpdatedStreakAndQuest,
+  createNotifications,
+  evaluateAndAwardBadges,
+  getTodayDateStr,
+} from '../lib/gamification.ts';
+import {
+  analyzePerformanceStructuredWithAI,
+  StructuredAiReport,
+} from '../lib/gemini.ts';
 import {
   normalizeUsername,
   resolveCallerUser,
@@ -313,23 +325,6 @@ studentsRouter.get('/students/:id/world', requireAuth, async (req: AuthRequest, 
 
     const { student } = access;
 
-    const missions = await db
-      .select()
-      .from(educationalContent)
-      .where(
-        and(
-          eq(educationalContent.gradeId, student.gradeId),
-          eq(educationalContent.reviewStatus, 'approved')
-        )
-      )
-      .orderBy(educationalContent.id);
-
-    const attempts = await db
-      .select()
-      .from(missionAttempts)
-      .where(eq(missionAttempts.studentId, studentId))
-      .orderBy(desc(missionAttempts.createdAt));
-
     const enrollments = await db
       .select({
         enrollmentId: classroomEnrollments.id,
@@ -348,6 +343,29 @@ studentsRouter.get('/students/:id/world', requireAuth, async (req: AuthRequest, 
     const classMap = new Map(enrollments.map((e) => [e.classroomId, e]));
     const enrolledClassIds = enrollments.map((e) => e.classroomId);
 
+    const missions = await db
+      .select()
+      .from(educationalContent)
+      .where(
+        and(
+          eq(educationalContent.gradeId, student.gradeId),
+          eq(educationalContent.reviewStatus, 'approved'),
+          enrolledClassIds.length > 0
+            ? or(
+                isNull(educationalContent.classroomId),
+                inArray(educationalContent.classroomId, enrolledClassIds)
+              )
+            : isNull(educationalContent.classroomId)
+        )
+      )
+      .orderBy(educationalContent.id);
+
+    const attempts = await db
+      .select()
+      .from(missionAttempts)
+      .where(eq(missionAttempts.studentId, studentId))
+      .orderBy(desc(missionAttempts.createdAt));
+
     const homeworkConditions = [
       and(eq(homeworks.gradeId, student.gradeId), eq(homeworks.creatorUid, student.parentUid)),
     ];
@@ -365,7 +383,8 @@ studentsRouter.get('/students/:id/world', requireAuth, async (req: AuthRequest, 
     const submissions = await db
       .select()
       .from(homeworkSubmissions)
-      .where(eq(homeworkSubmissions.studentId, studentId));
+      .where(eq(homeworkSubmissions.studentId, studentId))
+      .orderBy(desc(homeworkSubmissions.submittedAt));
 
     const examConditions = [and(eq(exams.gradeId, student.gradeId), isNull(exams.classroomId))];
     if (enrolledClassIds.length > 0) {
@@ -464,6 +483,7 @@ studentsRouter.get('/students/:id/world', requireAuth, async (req: AuthRequest, 
       student: sanitizeStudent(student),
       missions: missions.map((m) => ({
         ...m,
+        classroomName: m.classroomId ? classMap.get(m.classroomId)?.classroomName || null : null,
         payload: safeJsonParse<Record<string, unknown>>(m.payloadJson, {}),
         completed: completedIds.has(m.id),
       })),
@@ -473,13 +493,23 @@ studentsRouter.get('/students/:id/world', requireAuth, async (req: AuthRequest, 
         ...e,
         teacherName: e.teacherName || 'معلم کلاس',
       })),
-      homeworks: studentHomeworks.map((h) => ({
-        ...h,
-        classroomName: h.classroomId ? classMap.get(h.classroomId)?.classroomName || null : null,
-        classroomIsActive: h.classroomId ? classMap.get(h.classroomId)?.isActive ?? true : true,
-        questions: safeJsonParse<unknown[]>(h.questionsJson, []),
-        submission: submissions.find((s) => s.homeworkId === h.id) || null,
-      })),
+      homeworks: studentHomeworks.map((h) => {
+        const sub = submissions.find((s) => s.homeworkId === h.id) || null;
+        return {
+          ...h,
+          classroomName: h.classroomId ? classMap.get(h.classroomId)?.classroomName || null : null,
+          classroomIsActive: h.classroomId ? classMap.get(h.classroomId)?.isActive ?? true : true,
+          questions: safeJsonParse<unknown[]>(h.questionsJson, []),
+          submission: sub
+            ? {
+                ...sub,
+                answers: safeJsonParse<
+                  Array<{ promptText: string; studentAnswer: string; isCorrect: boolean }>
+                >(sub.answersJson, []),
+              }
+            : null,
+        };
+      }),
       exams: gradeExams.map((e) => ({
         ...e,
         classroomName: e.classroomId ? classMap.get(e.classroomId)?.classroomName || null : null,
@@ -489,6 +519,19 @@ studentsRouter.get('/students/:id/world', requireAuth, async (req: AuthRequest, 
       examAttempts: studentExamAttempts.map((ea) => ({
         ...ea,
         examTitle: examTitleMap.get(ea.examId) || `آزمون #${ea.examId}`,
+        wrongTopics: safeJsonParse<string[]>(ea.wrongTopicsJson, []),
+        strengths: safeJsonParse<string[]>(ea.strengthsJson, []),
+        gradedAnswers: safeJsonParse<
+          Array<{
+            id: string;
+            promptText: string;
+            selected: string;
+            correctAnswer: string;
+            explanation: string;
+            topicId: string;
+            isCorrect: boolean;
+          }>
+        >(ea.answersJson, []),
       })),
       videos: videos.map((v) => ({
         ...v,
@@ -516,20 +559,27 @@ studentsRouter.post('/students/:id/attempts', requireAuth, async (req: AuthReque
     if (access.status === 'forbidden') return res.status(403).json({ error: 'دسترسی غیرمجاز.' });
 
     const { student } = access;
-    const { contentId, bookId, topicId, questionType, isCorrect, durationSeconds } = req.body as {
-      contentId?: number;
-      bookId: string;
-      topicId: string;
-      questionType: string;
-      isCorrect: boolean;
-      durationSeconds?: number;
-    };
+    const { contentId, bookId, topicId, questionType, isCorrect, durationSeconds, studentAnswer } =
+      req.body as {
+        contentId?: number;
+        bookId: string;
+        topicId: string;
+        questionType: string;
+        isCorrect: boolean;
+        durationSeconds?: number;
+        studentAnswer?: string;
+      };
 
     const coinsEarned = isCorrect ? 25 : 5;
     const scoreEarned = isCorrect ? 40 : 10;
     const nextReviewAt = isCorrect
       ? new Date(Date.now() + 7 * 24 * 3600 * 1000)
       : new Date(Date.now() + 12 * 3600 * 1000);
+
+    const cleanStudentAnswer =
+      typeof studentAnswer === 'string' && studentAnswer.trim()
+        ? studentAnswer.trim().slice(0, 500)
+        : null;
 
     const [attempt] = await db
       .insert(missionAttempts)
@@ -540,6 +590,7 @@ studentsRouter.post('/students/:id/attempts', requireAuth, async (req: AuthReque
         bookId: String(bookId || 'math'),
         topicId: String(topicId || 'عمومی'),
         questionType: String(questionType || 'mcq'),
+        studentAnswer: cleanStudentAnswer,
         isCorrect: Boolean(isCorrect),
         scoreEarned,
         coinsEarned,
@@ -548,7 +599,37 @@ studentsRouter.post('/students/:id/attempts', requireAuth, async (req: AuthReque
       })
       .returning();
 
+    if (contentId) {
+      const [contentRow] = await db
+        .select({
+          id: educationalContent.id,
+          authorUid: educationalContent.authorUid,
+          promptText: educationalContent.promptText,
+          classroomId: educationalContent.classroomId,
+        })
+        .from(educationalContent)
+        .where(eq(educationalContent.id, Number(contentId)))
+        .limit(1);
+
+      if (contentRow?.authorUid) {
+        await createNotifications([
+          {
+            recipientUid: contentRow.authorUid,
+            studentId: student.id,
+            role: 'teacher',
+            title: `پاسخ ${student.nickname} به سؤال شما`,
+            body: `${student.nickname} به سؤال «${contentRow.promptText.slice(0, 55)}» پاسخ ${
+              isCorrect ? 'درست' : 'نادرست'
+            } داد${cleanStudentAnswer ? ` (${cleanStudentAnswer.slice(0, 40)})` : ''}.`,
+            type: 'feedback',
+          },
+        ]);
+      }
+    }
+
     const minutesAdded = Math.max(1, Math.round((Number(durationSeconds) || 30) / 60));
+    const streakAndQuest = computeUpdatedStreakAndQuest(student, Boolean(isCorrect));
+
     const [updatedStudent] = await db
       .update(studentProfiles)
       .set({
@@ -556,14 +637,348 @@ studentsRouter.post('/students/:id/attempts', requireAuth, async (req: AuthReque
         xp: student.xp + scoreEarned,
         minutesUsedToday: student.minutesUsedToday + minutesAdded,
         lastGameType: String(questionType || 'mcq'),
+        ...streakAndQuest,
       })
       .where(eq(studentProfiles.id, studentId))
       .returning();
 
-    res.json({ attempt, student: sanitizeStudent(updatedStudent) });
+    const newlyUnlockedBadges = await evaluateAndAwardBadges(studentId);
+    const [latestStudent] = newlyUnlockedBadges.length
+      ? await db.select().from(studentProfiles).where(eq(studentProfiles.id, studentId)).limit(1)
+      : [updatedStudent];
+
+    res.json({
+      attempt,
+      student: sanitizeStudent(latestStudent || updatedStudent),
+      newlyUnlockedBadges,
+    });
   } catch (error: unknown) {
     console.error('POST /api/students/:id/attempts failed:', error);
     res.status(500).json({ error: 'ثبت نتیجه مأموریت با خطا مواجه شد.' });
+  }
+});
+
+studentsRouter.post('/students/:id/daily-quest/claim', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const studentId = Number(req.params.id);
+    const access = await verifyStudentAccess(studentId, req);
+    if (access.status === 'not_found') return res.status(404).json({ error: 'دانش‌آموز یافت نشد.' });
+    if (access.status === 'forbidden') return res.status(403).json({ error: 'دسترسی غیرمجاز.' });
+
+    const { student } = access;
+    const today = getTodayDateStr();
+    const quest = normalizeDailyQuestState(student.dailyQuestProgress, today);
+
+    if (!quest.completed) {
+      return res.status(400).json({ error: 'چالش روزانه امروز هنوز کامل نشده است.' });
+    }
+    if (quest.claimed) {
+      return res.status(400).json({ error: 'جایزه چالش امروز قبلاً دریافت شده است.' });
+    }
+
+    quest.claimed = true;
+    const rewardCoins = 50;
+    const rewardXp = 100;
+
+    const [updatedStudent] = await db
+      .update(studentProfiles)
+      .set({
+        coins: student.coins + rewardCoins,
+        xp: student.xp + rewardXp,
+        dailyQuestProgress: JSON.stringify(quest),
+      })
+      .where(eq(studentProfiles.id, studentId))
+      .returning();
+
+    const newlyUnlockedBadges = await evaluateAndAwardBadges(studentId);
+    const [latestStudent] = newlyUnlockedBadges.length
+      ? await db.select().from(studentProfiles).where(eq(studentProfiles.id, studentId)).limit(1)
+      : [updatedStudent];
+
+    res.json({
+      student: sanitizeStudent(latestStudent || updatedStudent),
+      newlyUnlockedBadges,
+      rewardCoins,
+      rewardXp,
+    });
+  } catch (error) {
+    console.error('POST /api/students/:id/daily-quest/claim failed:', error);
+    res.status(500).json({ error: 'دریافت جایزه چالش روزانه با خطا مواجه شد.' });
+  }
+});
+
+studentsRouter.get('/students/:id/leaderboard', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const studentId = Number(req.params.id);
+    const access = await verifyStudentAccess(studentId, req);
+    if (access.status === 'not_found') return res.status(404).json({ error: 'دانش‌آموز یافت نشد.' });
+    if (access.status === 'forbidden') return res.status(403).json({ error: 'دسترسی غیرمجاز.' });
+
+    const myEnrollments = await db
+      .select({
+        classroomId: classrooms.id,
+        classroomName: classrooms.name,
+        gradeId: classrooms.gradeId,
+      })
+      .from(classroomEnrollments)
+      .innerJoin(classrooms, eq(classroomEnrollments.classroomId, classrooms.id))
+      .where(eq(classroomEnrollments.studentId, studentId));
+
+    if (myEnrollments.length === 0) {
+      return res.json({ classrooms: [] });
+    }
+
+    const classIds = myEnrollments.map((e) => e.classroomId);
+    const allClassMembers = await db
+      .select({
+        classroomId: classroomEnrollments.classroomId,
+        studentId: studentProfiles.id,
+        nickname: studentProfiles.nickname,
+        heroClass: studentProfiles.heroClass,
+        avatarColor: studentProfiles.avatarColor,
+        xp: studentProfiles.xp,
+      })
+      .from(classroomEnrollments)
+      .innerJoin(studentProfiles, eq(classroomEnrollments.studentId, studentProfiles.id))
+      .where(inArray(classroomEnrollments.classroomId, classIds))
+      .orderBy(desc(studentProfiles.xp));
+
+    const leaderboards = myEnrollments.map((cls) => {
+      const members = allClassMembers
+        .filter((m) => m.classroomId === cls.classroomId)
+        .sort((a, b) => b.xp - a.xp);
+
+      return {
+        classroomId: cls.classroomId,
+        classroomName: cls.classroomName,
+        gradeId: cls.gradeId,
+        rankings: members.map((m, idx) => ({
+          rank: idx + 1,
+          nickname: m.nickname,
+          heroClass: m.heroClass,
+          avatarColor: m.avatarColor,
+          xp: m.xp,
+          isSelf: m.studentId === studentId,
+        })),
+      };
+    });
+
+    res.json({ classrooms: leaderboards });
+  } catch (error) {
+    console.error('GET /api/students/:id/leaderboard failed:', error);
+    res.status(500).json({ error: 'دریافت جدول قهرمانان کلاس با خطا مواجه شد.' });
+  }
+});
+
+studentsRouter.get('/students/:id/adaptive-practice', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    await ensureCurriculumSeeded();
+    const studentId = Number(req.params.id);
+    const access = await verifyStudentAccess(studentId, req);
+    if (access.status === 'not_found') return res.status(404).json({ error: 'دانش‌آموز یافت نشد.' });
+    if (access.status === 'forbidden') return res.status(403).json({ error: 'دسترسی غیرمجاز.' });
+
+    const { student } = access;
+    const recentAttempts = await db
+      .select()
+      .from(missionAttempts)
+      .where(eq(missionAttempts.studentId, studentId))
+      .orderBy(desc(missionAttempts.createdAt))
+      .limit(80);
+
+    const topicPenalty = new Map<string, number>();
+    for (const att of recentAttempts) {
+      let penalty = 0;
+      if (!att.isCorrect) penalty += 3;
+      if (att.durationSeconds >= 30) penalty += 1;
+      if (penalty > 0) {
+        topicPenalty.set(att.topicId, (topicPenalty.get(att.topicId) || 0) + penalty);
+      }
+    }
+
+    const weakTopics = [...topicPenalty.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([topic]) => topic);
+
+    const approvedMissions = await db
+      .select()
+      .from(educationalContent)
+      .where(
+        and(
+          eq(educationalContent.gradeId, student.gradeId),
+          eq(educationalContent.reviewStatus, 'approved')
+        )
+      )
+      .orderBy(educationalContent.id);
+
+    const weakSet = new Set(weakTopics);
+    const wrongContentIds = new Set(
+      recentAttempts.filter((a) => !a.isCorrect && a.contentId).map((a) => a.contentId!)
+    );
+
+    const prioritized = approvedMissions.filter(
+      (m) => weakSet.has(m.topicId) || wrongContentIds.has(m.id)
+    );
+    const fallbackPool = approvedMissions.filter(
+      (m) => !prioritized.some((p) => p.id === m.id)
+    );
+
+    const selected = [...prioritized, ...fallbackPool].slice(0, 6).map((m) => ({
+      ...m,
+      payload: safeJsonParse<Record<string, unknown>>(m.payloadJson, {}),
+      completed: false,
+    }));
+
+    res.json({
+      weakTopics,
+      missions: selected,
+    });
+  } catch (error) {
+    console.error('GET /api/students/:id/adaptive-practice failed:', error);
+    res.status(500).json({ error: 'آماده‌سازی تمرین هوشمند اختصاصی با خطا مواجه شد.' });
+  }
+});
+
+studentsRouter.post('/students/:id/ai-report', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const studentId = Number(req.params.id);
+    if (!Number.isInteger(studentId)) {
+      return res.status(400).json({ error: 'شناسه دانش‌آموز نامعتبر است.' });
+    }
+
+    const caller = await resolveCallerUser(req);
+    const [student] = await db
+      .select()
+      .from(studentProfiles)
+      .where(eq(studentProfiles.id, studentId))
+      .limit(1);
+    if (!student) {
+      return res.status(404).json({ error: 'دانش‌آموز یافت نشد.' });
+    }
+
+    let permitted = false;
+    if (!caller.isStudentSession) {
+      if (caller.role === 'admin' || student.parentUid === caller.uid) {
+        permitted = true;
+      } else if (caller.role === 'teacher' && caller.user?.teacherApproved) {
+        const teacherClasses = await db
+          .select({ id: classrooms.id })
+          .from(classrooms)
+          .where(eq(classrooms.teacherUid, caller.uid));
+        const classIds = teacherClasses.map((c) => c.id);
+        if (classIds.length > 0) {
+          const enrolled = await db
+            .select({ id: classroomEnrollments.id })
+            .from(classroomEnrollments)
+            .where(
+              and(
+                eq(classroomEnrollments.studentId, studentId),
+                inArray(classroomEnrollments.classroomId, classIds)
+              )
+            )
+            .limit(1);
+          permitted = enrolled.length > 0;
+        }
+      }
+    }
+
+    if (!permitted) {
+      return res.status(403).json({
+        error: 'فقط والدین، معلم کلاس دانش‌آموز یا مدیر کل مجاز به دریافت تحلیل پیشرفت هستند.',
+      });
+    }
+
+    const forceRefresh = Boolean(req.body?.forceRefresh);
+    const now = new Date();
+
+    if (!forceRefresh) {
+      const [cachedRow] = await db
+        .select()
+        .from(aiReportCache)
+        .where(eq(aiReportCache.studentId, studentId))
+        .limit(1);
+
+      if (cachedRow && new Date(cachedRow.expiresAt) > now) {
+        const parsed = safeJsonParse<StructuredAiReport | null>(cachedRow.reportJson, null);
+        if (parsed) {
+          return res.json({
+            report: parsed,
+            cached: true,
+            generatedAt: cachedRow.createdAt,
+            expiresAt: cachedRow.expiresAt,
+          });
+        }
+      }
+    }
+
+    const [attempts, examHistory] = await Promise.all([
+      db
+        .select()
+        .from(missionAttempts)
+        .where(eq(missionAttempts.studentId, student.id))
+        .orderBy(desc(missionAttempts.createdAt))
+        .limit(40),
+      db
+        .select()
+        .from(examAttempts)
+        .where(eq(examAttempts.studentId, student.id))
+        .orderBy(desc(examAttempts.completedAt))
+        .limit(12),
+    ]);
+
+    const total = attempts.length;
+    const correct = attempts.filter((a) => a.isCorrect).length;
+    const accuracy = total > 0 ? Math.round((correct / total) * 100) : 0;
+    const weakTopics = [...new Set(attempts.filter((a) => !a.isCorrect).map((a) => a.topicId))];
+    const strongTopics = [...new Set(attempts.filter((a) => a.isCorrect).map((a) => a.topicId))];
+
+    const summaryText = `پایه تحصیلی: ${student.gradeId} | XP کل: ${student.xp} | روزهای پیوسته: ${student.currentStreak}.
+تعداد مأموریت‌های حل‌شده اخیر: ${total} (درصد دقت: ${accuracy}٪، پاسخ درست: ${correct}).
+مباحث موفق دانش‌آموز: ${strongTopics.slice(0, 6).join('، ') || 'در حال ارزیابی اولیه'}.
+مباحث دارای اشتباه یا نیازمند تمرین: ${weakTopics.slice(0, 6).join('، ') || 'مورد خاصی ثبت نشده'}.
+تعداد آزمون‌های شرکت‌کرده: ${examHistory.length}، آخرین نمره آزمون: ${
+      examHistory[0] ? `${examHistory[0].score} از ${examHistory[0].maxScore}` : 'هنوز ثبت نشده'
+    }.`;
+
+    const report = await analyzePerformanceStructuredWithAI({
+      studentName: student.nickname,
+      gradeId: student.gradeId,
+      summaryText,
+    });
+
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await db
+      .insert(aiReportCache)
+      .values({
+        studentId: student.id,
+        reportJson: JSON.stringify(report),
+        createdAt: now,
+        expiresAt,
+      })
+      .onConflictDoUpdate({
+        target: aiReportCache.studentId,
+        set: {
+          reportJson: JSON.stringify(report),
+          createdAt: now,
+          expiresAt,
+        },
+      });
+
+    res.json({
+      report,
+      cached: false,
+      generatedAt: now.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+    });
+  } catch (error) {
+    console.error('POST /api/students/:id/ai-report failed:', error);
+    res.status(502).json({
+      error:
+        error instanceof Error
+          ? error.message
+          : 'تحلیل هوشمند پیشرفت با خطا مواجه شد.',
+    });
   }
 });
 
@@ -607,7 +1022,12 @@ studentsRouter.post('/students/:id/shop/buy', requireAuth, async (req: AuthReque
       .where(eq(studentProfiles.id, studentId))
       .returning();
 
-    res.json({ student: sanitizeStudent(updated) });
+    const newlyUnlockedBadges = await evaluateAndAwardBadges(studentId);
+    const [latestStudent] = newlyUnlockedBadges.length
+      ? await db.select().from(studentProfiles).where(eq(studentProfiles.id, studentId)).limit(1)
+      : [updated];
+
+    res.json({ student: sanitizeStudent(latestStudent || updated), newlyUnlockedBadges });
   } catch (error: unknown) {
     console.error('POST /api/students/:id/shop/buy failed:', error);
     res.status(500).json({ error: 'خطا در خرید آیتم فروشگاه.' });
@@ -847,6 +1267,34 @@ studentsRouter.post('/homeworks', requireAuth, async (req: AuthRequest, res) => 
         message: `تکلیف جدید ثبت شد: ${created.title} (مهلت: ${created.dueDate})`,
         scheduledDate: created.dueDate,
       });
+
+      const classMembers = await db
+        .select({
+          studentId: studentProfiles.id,
+          parentUid: studentProfiles.parentUid,
+        })
+        .from(classroomEnrollments)
+        .innerJoin(studentProfiles, eq(classroomEnrollments.studentId, studentProfiles.id))
+        .where(eq(classroomEnrollments.classroomId, Number(classroomId)));
+
+      const notifBatch = classMembers.flatMap((m) => [
+        {
+          studentId: m.studentId,
+          role: 'student' as const,
+          title: 'تکلیف جدید ثبت شد',
+          body: `${created.title} (مهلت تحویل: ${created.dueDate})`,
+          type: 'homework' as const,
+        },
+        {
+          recipientUid: m.parentUid,
+          studentId: m.studentId,
+          role: 'parent' as const,
+          title: 'تکلیف جدید از معلم کلاس',
+          body: `${created.title} (مهلت تحویل: ${created.dueDate})`,
+          type: 'homework' as const,
+        },
+      ]);
+      await createNotifications(notifBatch);
     }
 
     res.status(201).json({
@@ -875,28 +1323,87 @@ studentsRouter.post('/homeworks/:id/submit', requireAuth, async (req: AuthReques
     const [hw] = await db.select().from(homeworks).where(eq(homeworks.id, homeworkId)).limit(1);
     if (!hw) return res.status(404).json({ error: 'تکلیف یافت نشد.' });
 
-    const [submission] = await db
-      .insert(homeworkSubmissions)
-      .values({
-        homeworkId,
-        studentId: student.id,
-        answersJson: JSON.stringify(answers || []),
-        autoScore: Math.max(0, Math.min(100, Number(autoScore) || 0)),
-        status: 'submitted',
-      })
-      .returning();
+    const safeScore = Math.max(0, Math.min(100, Number(autoScore) || 0));
+    const [existingSub] = await db
+      .select()
+      .from(homeworkSubmissions)
+      .where(
+        and(
+          eq(homeworkSubmissions.homeworkId, homeworkId),
+          eq(homeworkSubmissions.studentId, student.id)
+        )
+      )
+      .orderBy(desc(homeworkSubmissions.submittedAt))
+      .limit(1);
 
-    const rewardCoins = 40;
+    let submission: typeof homeworkSubmissions.$inferSelect;
+    let isFirstSubmission = false;
+
+    if (existingSub) {
+      const [updatedSub] = await db
+        .update(homeworkSubmissions)
+        .set({
+          answersJson: JSON.stringify(answers || []),
+          autoScore: safeScore,
+          status: 'submitted',
+          submittedAt: new Date(),
+        })
+        .where(eq(homeworkSubmissions.id, existingSub.id))
+        .returning();
+      submission = updatedSub;
+    } else {
+      isFirstSubmission = true;
+      const [insertedSub] = await db
+        .insert(homeworkSubmissions)
+        .values({
+          homeworkId,
+          studentId: student.id,
+          answersJson: JSON.stringify(answers || []),
+          autoScore: safeScore,
+          status: 'submitted',
+        })
+        .returning();
+      submission = insertedSub;
+    }
+
+    const rewardCoins = isFirstSubmission ? 40 : 0;
+    const rewardXp = isFirstSubmission ? 60 : 10;
     const [updatedStudent] = await db
       .update(studentProfiles)
       .set({
         coins: student.coins + rewardCoins,
-        xp: student.xp + 60,
+        xp: student.xp + rewardXp,
       })
       .where(eq(studentProfiles.id, student.id))
       .returning();
 
-    res.status(201).json({ submission, student: sanitizeStudent(updatedStudent), rewardCoins });
+    if (hw.creatorUid) {
+      await createNotifications([
+        {
+          recipientUid: hw.creatorUid,
+          studentId: student.id,
+          role: hw.creatorRole === 'teacher' ? 'teacher' : 'parent',
+          title: isFirstSubmission
+            ? `ارسال تکلیف توسط ${student.nickname}`
+            : `اصلاح و ارسال مجدد تکلیف توسط ${student.nickname}`,
+          body: `${student.nickname} تکلیف «${hw.title}» را با نمره خودکار ${safeScore}٪ ارسال کرد.`,
+          type: 'homework',
+        },
+      ]);
+    }
+
+    const newlyUnlockedBadges = await evaluateAndAwardBadges(student.id);
+    const [latestStudent] = newlyUnlockedBadges.length
+      ? await db.select().from(studentProfiles).where(eq(studentProfiles.id, student.id)).limit(1)
+      : [updatedStudent];
+
+    res.status(201).json({
+      submission,
+      student: sanitizeStudent(latestStudent || updatedStudent),
+      rewardCoins,
+      isResubmission: !isFirstSubmission,
+      newlyUnlockedBadges,
+    });
   } catch (error: unknown) {
     console.error('POST /api/homeworks/:id/submit failed:', error);
     res.status(500).json({ error: 'ثبت ارسال تکلیف با خطا مواجه شد.' });
@@ -943,12 +1450,25 @@ studentsRouter.post('/exams', requireAuth, async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'عنوان آزمون و حداقل یک سؤال الزامی است.' });
     }
 
+    let resolvedGradeId = Number(gradeId);
+    if (classroomId) {
+      const [cls] = await db
+        .select()
+        .from(classrooms)
+        .where(eq(classrooms.id, Number(classroomId)))
+        .limit(1);
+      if (!cls || (cls.teacherUid !== uid && user.role !== 'admin')) {
+        return res.status(403).json({ error: 'فقط معلم این کلاس می‌تواند برای آن آزمون بسازد.' });
+      }
+      resolvedGradeId = cls.gradeId;
+    }
+
     const [created] = await db
       .insert(exams)
       .values({
         classroomId: classroomId ? Number(classroomId) : null,
         creatorUid: uid,
-        gradeId: Number(gradeId),
+        gradeId: resolvedGradeId,
         bookId: bookId || 'math',
         examType: examType || 'teacher_custom',
         title: title.trim().slice(0, 120),
@@ -968,6 +1488,34 @@ studentsRouter.post('/exams', requireAuth, async (req: AuthRequest, res) => {
         kind: 'exam',
         message: `آزمون جدید منتشر شد: ${created.title} (${created.durationMinutes} دقیقه)`,
       });
+
+      const classMembers = await db
+        .select({
+          studentId: studentProfiles.id,
+          parentUid: studentProfiles.parentUid,
+        })
+        .from(classroomEnrollments)
+        .innerJoin(studentProfiles, eq(classroomEnrollments.studentId, studentProfiles.id))
+        .where(eq(classroomEnrollments.classroomId, Number(classroomId)));
+
+      const notifBatch = classMembers.flatMap((m) => [
+        {
+          studentId: m.studentId,
+          role: 'student' as const,
+          title: 'آزمون جدید منتشر شد',
+          body: `${created.title} (${created.durationMinutes} دقیقه)`,
+          type: 'exam' as const,
+        },
+        {
+          recipientUid: m.parentUid,
+          studentId: m.studentId,
+          role: 'parent' as const,
+          title: 'آزمون جدید کلاس',
+          body: `${created.title} (${created.durationMinutes} دقیقه)`,
+          type: 'exam' as const,
+        },
+      ]);
+      await createNotifications(notifBatch);
     }
 
     res.status(201).json({ exam: { ...created, questions } });
@@ -1060,6 +1608,24 @@ studentsRouter.post('/exams/:id/submit', requireAuth, async (req: AuthRequest, r
       .where(eq(studentProfiles.id, student.id))
       .returning();
 
+    if (exam.creatorUid && exam.creatorUid !== 'system') {
+      await createNotifications([
+        {
+          recipientUid: exam.creatorUid,
+          studentId: student.id,
+          role: 'teacher',
+          title: `ثبت پاسخ آزمون توسط ${student.nickname}`,
+          body: `${student.nickname} آزمون «${exam.title}» را با نمره ${score} از ${exam.maxScore} (${correctCount}/${totalQuestions} درست) به پایان رساند.`,
+          type: 'exam',
+        },
+      ]);
+    }
+
+    const newlyUnlockedBadges = await evaluateAndAwardBadges(student.id);
+    const [latestStudent] = newlyUnlockedBadges.length
+      ? await db.select().from(studentProfiles).where(eq(studentProfiles.id, student.id)).limit(1)
+      : [updatedStudent];
+
     res.status(201).json({
       attempt: {
         ...attempt,
@@ -1067,7 +1633,8 @@ studentsRouter.post('/exams/:id/submit', requireAuth, async (req: AuthRequest, r
         strengths: [...new Set(strengths)],
         gradedAnswers,
       },
-      student: sanitizeStudent(updatedStudent),
+      student: sanitizeStudent(latestStudent || updatedStudent),
+      newlyUnlockedBadges,
     });
   } catch (error: unknown) {
     console.error('POST /api/exams/:id/submit failed:', error);

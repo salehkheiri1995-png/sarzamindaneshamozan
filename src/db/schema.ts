@@ -42,6 +42,11 @@ export const studentProfiles = pgTable('student_profiles', {
   coins: integer('coins').notNull().default(120),
   xp: integer('xp').notNull().default(0),
   streakDays: integer('streak_days').notNull().default(1),
+  currentStreak: integer('current_streak').notNull().default(1),
+  longestStreak: integer('longest_streak').notNull().default(1),
+  lastActiveDate: text('last_active_date'),
+  dailyQuestProgress: text('daily_quest_progress').notNull().default('{}'),
+  earnedBadges: text('earned_badges').notNull().default('[]'),
   dailyLimitMinutes: integer('daily_limit_minutes').notNull().default(45),
   minutesUsedToday: integer('minutes_used_today').notNull().default(0),
   allowOptionalAds: boolean('allow_optional_ads').notNull().default(true),
@@ -76,6 +81,7 @@ export const classroomEnrollments = pgTable('classroom_enrollments', {
 
 export const educationalContent = pgTable('educational_content', {
   id: serial('id').primaryKey(),
+  classroomId: integer('classroom_id').references(() => classrooms.id, { onDelete: 'set null' }),
   gradeId: integer('grade_id').notNull(),
   bookId: text('book_id').notNull(),
   realmId: text('realm_id').notNull(),
@@ -110,6 +116,7 @@ export const missionAttempts = pgTable('mission_attempts', {
   bookId: text('book_id').notNull(),
   topicId: text('topic_id').notNull(),
   questionType: text('question_type').notNull(),
+  studentAnswer: text('student_answer'),
   isCorrect: boolean('is_correct').notNull(),
   scoreEarned: integer('score_earned').notNull().default(0),
   coinsEarned: integer('coins_earned').notNull().default(0),
@@ -222,6 +229,29 @@ export const adEvents = pgTable('ad_events', {
   eventType: text('event_type').notNull(), // request | impression | reward_completed | skipped
   rewardCoins: integer('reward_coins').notNull().default(0),
   createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const notifications = pgTable('notifications', {
+  id: serial('id').primaryKey(),
+  recipientUid: text('recipient_uid'),
+  studentId: integer('student_id').references(() => studentProfiles.id, { onDelete: 'cascade' }),
+  role: text('role').notNull().default('student'), // student | parent | teacher | admin
+  title: text('title').notNull(),
+  body: text('body').notNull(),
+  type: text('type').notNull().default('announcement'), // homework | exam | feedback | approval | announcement | badge
+  isRead: boolean('is_read').notNull().default(false),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const aiReportCache = pgTable('ai_report_cache', {
+  id: serial('id').primaryKey(),
+  studentId: integer('student_id')
+    .references(() => studentProfiles.id, { onDelete: 'cascade' })
+    .notNull()
+    .unique(),
+  reportJson: text('report_json').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+  expiresAt: timestamp('expires_at').notNull(),
 });
 
 // Relations

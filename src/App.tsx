@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { AuthProvider, SessionRole, StudentProfile, useAuth } from './context/AuthContext';
+import { ToastProvider, useToast } from './context/ToastContext';
 import { TitleScreen } from './components/game/TitleScreen';
 import { LoginPortalModal } from './components/auth/LoginPortalModal';
 import { StudentOnboarding } from './components/game/StudentOnboarding';
@@ -12,6 +13,10 @@ import { ParentPanel } from './components/panels/ParentPanel';
 import { TeacherPanel } from './components/panels/TeacherPanel';
 import { AdminPanel } from './components/panels/AdminPanel';
 import { HeroAvatarSvg } from './components/game/HeroAvatarSvg';
+import { BadgeUnlockModal } from './components/game/BadgeShowcase';
+import { NotificationBell } from './components/common/NotificationBell';
+import { SkeletonLoader } from './components/common/SkeletonLoader';
+import { PWABanners } from './components/pwa/PWABanners';
 import { apiFetch } from './lib/api';
 import { soundEngine } from './lib/sound';
 import {
@@ -19,6 +24,7 @@ import {
   OFFICIAL_SEED_MISSIONS,
   formatPersianDigits,
 } from './shared/curriculum';
+import { BadgeDefinition, getHeroLevel } from './shared/gamification';
 import { MissionItem, StudentWorldData } from './types/game';
 import {
   Map,
@@ -37,6 +43,7 @@ import {
   Home,
   Clock,
   Coffee,
+  Flame,
 } from 'lucide-react';
 
 type ShellMode =
@@ -178,6 +185,7 @@ function HeroLandApp() {
     updateLocalStudent,
   } = useAuth();
 
+  const { showToast } = useToast();
   const [mode, setMode] = useState<ShellMode>('TITLE_MENU');
   const [subTab, setSubTab] = useState<StudentSubTab>('map');
   const [muted, setMuted] = useState(false);
@@ -187,6 +195,7 @@ function HeroLandApp() {
   const [worldLoading, setWorldLoading] = useState(false);
   const [worldError, setWorldError] = useState<string | null>(null);
   const [activeMission, setActiveMission] = useState<MissionItem | null>(null);
+  const [unlockedBadgesModal, setUnlockedBadgesModal] = useState<BadgeDefinition[]>([]);
 
   const [isDemoMode, setIsDemoMode] = useState(false);
 
@@ -295,7 +304,11 @@ function HeroLandApp() {
     setSubTab('map');
   };
 
-  const handleMissionCompleted = async (result: { isCorrect: boolean; durationSeconds: number }) => {
+  const handleMissionCompleted = async (result: {
+    isCorrect: boolean;
+    durationSeconds: number;
+    studentAnswer?: string;
+  }) => {
     if (!activeMission || !worldData) return;
     if (isDemoMode) {
       const coinsEarned = result.isCorrect ? 25 : 5;
@@ -325,7 +338,10 @@ function HeroLandApp() {
     }
 
     try {
-      const res = await apiFetch<{ student: StudentProfile }>(
+      const res = await apiFetch<{
+        student: StudentProfile;
+        newlyUnlockedBadges?: BadgeDefinition[];
+      }>(
         `/api/students/${worldData.student.id}/attempts`,
         {
           method: 'POST',
@@ -336,13 +352,19 @@ function HeroLandApp() {
             questionType: activeMission.questionType,
             isCorrect: result.isCorrect,
             durationSeconds: result.durationSeconds,
+            studentAnswer: result.studentAnswer,
           }),
         }
       );
       updateLocalStudent(res.student);
+      if (res.newlyUnlockedBadges?.length) {
+        soundEngine.playVictory();
+        setUnlockedBadgesModal(res.newlyUnlockedBadges);
+      }
       loadStudentWorld(worldData.student.id);
     } catch (err) {
       console.error('Failed to record mission attempt:', err);
+      showToast('ثبت امتیاز مأموریت با خطا مواجه شد.', 'error');
     }
   };
 
@@ -463,7 +485,10 @@ function HeroLandApp() {
   const remainingMinutesToday = currentStudent
     ? Math.max(0, currentStudent.dailyLimitMinutes - currentStudent.minutesUsedToday)
     : 0;
-  const pendingHwCount = worldData ? worldData.homeworks.filter((h) => !h.submission).length : 0;
+  const pendingHwCount = worldData
+    ? worldData.homeworks.filter((h) => !h.submission || h.submission.status === 'needs_revision')
+        .length
+    : 0;
   const takenExamIds = new Set((worldData?.examAttempts || []).map((a) => a.examId));
   const pendingExamCount = worldData
     ? worldData.exams.filter((e) => !takenExamIds.has(e.id)).length
@@ -591,7 +616,7 @@ function HeroLandApp() {
           </nav>
 
           {/* Right/End Controls */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5 sm:gap-3">
             {isStudentWorkspace && currentStudent && (
               <div className="hidden md:flex items-center gap-3 text-xs font-extrabold tabular-nums">
                 {!isDemoMode && (
@@ -602,19 +627,28 @@ function HeroLandApp() {
                     title="سقف زمان روزانه تعیین‌شده توسط والدین"
                   >
                     <Clock className="h-4 w-4" />
-                    {formatPersianDigits(remainingMinutesToday)} دقیقه باقی‌مانده
+                    {formatPersianDigits(remainingMinutesToday)} دقیقه
                   </span>
                 )}
+                <span
+                  className="inline-flex items-center gap-1 text-orange-300"
+                  title="استریک روزهای متوالی فعالیت"
+                >
+                  <Flame className="h-4 w-4" />
+                  {formatPersianDigits(currentStudent.currentStreak || currentStudent.streakDays || 1)} روز
+                </span>
                 <span className="inline-flex items-center gap-1 text-amber-300">
                   <Coins className="h-4 w-4" />
                   {formatPersianDigits(currentStudent.coins)}
                 </span>
                 <span className="inline-flex items-center gap-1 text-teal-300">
                   <Star className="h-4 w-4" />
-                  {formatPersianDigits(currentStudent.xp)}
+                  سطح {formatPersianDigits(getHeroLevel(currentStudent.xp).level)} · {formatPersianDigits(currentStudent.xp)}
                 </span>
               </div>
             )}
+
+            {isAuthenticated && !isDemoMode && <NotificationBell />}
 
             <button
               type="button"
@@ -730,9 +764,7 @@ function HeroLandApp() {
                 </div>
               </div>
             ) : worldLoading && !worldData ? (
-              <div className="py-16 text-center text-sm font-bold text-stone-600">
-                در حال بارگذاری سرزمین‌ها و مأموریت‌های پایه تحصیلی...
-              </div>
+              <SkeletonLoader variant="world" />
             ) : !worldData ? (
               <div className="rounded-3xl border border-[#E5DAC5] bg-white p-10 text-center space-y-4">
                 <h2 className="text-xl font-extrabold text-stone-900">پروفایل دانش‌آموز یافت نشد</h2>
@@ -748,6 +780,22 @@ function HeroLandApp() {
                       setActiveMission(m);
                       setMode('ACTIVE_MISSION');
                     }}
+                    onGoToHomework={() => {
+                      soundEngine.playClick();
+                      setSubTab('homework');
+                    }}
+                    onGoToExams={() => {
+                      soundEngine.playClick();
+                      setSubTab('exams');
+                    }}
+                    onStudentUpdate={(updated) => {
+                      setWorldData((prev) => (prev ? { ...prev, student: updated } : prev));
+                      if (!isDemoMode) updateLocalStudent(updated);
+                    }}
+                    onBadgesUnlocked={(badges) => {
+                      soundEngine.playVictory();
+                      setUnlockedBadgesModal(badges);
+                    }}
                   />
                 )}
                 {subTab === 'homework' && (
@@ -757,6 +805,10 @@ function HeroLandApp() {
                     homeworks={worldData.homeworks}
                     isDemoMode={isDemoMode}
                     onRefresh={() => !isDemoMode && loadStudentWorld(worldData.student.id)}
+                    onBadgesUnlocked={(badges) => {
+                      soundEngine.playVictory();
+                      setUnlockedBadgesModal(badges);
+                    }}
                   />
                 )}
                 {subTab === 'exams' && (
@@ -767,6 +819,10 @@ function HeroLandApp() {
                     examAttempts={worldData.examAttempts}
                     isDemoMode={isDemoMode}
                     onRefresh={() => !isDemoMode && loadStudentWorld(worldData.student.id)}
+                    onBadgesUnlocked={(badges) => {
+                      soundEngine.playVictory();
+                      setUnlockedBadgesModal(badges);
+                    }}
                   />
                 )}
                 {subTab === 'castle' && (
@@ -777,6 +833,10 @@ function HeroLandApp() {
                     onStudentUpdate={(updated) => {
                       setWorldData((prev) => (prev ? { ...prev, student: updated } : prev));
                       if (!isDemoMode) updateLocalStudent(updated);
+                    }}
+                    onBadgesUnlocked={(badges) => {
+                      soundEngine.playVictory();
+                      setUnlockedBadgesModal(badges);
                     }}
                     onRefresh={() => !isDemoMode && loadStudentWorld(worldData.student.id)}
                   />
@@ -821,14 +881,22 @@ function HeroLandApp() {
           }}
         />
       )}
+
+      <BadgeUnlockModal
+        badges={unlockedBadgesModal}
+        onClose={() => setUnlockedBadgesModal([])}
+      />
+      <PWABanners />
     </div>
   );
 }
 
 export default function App() {
   return (
-    <AuthProvider>
-      <HeroLandApp />
-    </AuthProvider>
+    <ToastProvider>
+      <AuthProvider>
+        <HeroLandApp />
+      </AuthProvider>
+    </ToastProvider>
   );
 }

@@ -43,6 +43,11 @@ export interface StudentProfile {
   coins: number;
   xp: number;
   streakDays: number;
+  currentStreak?: number;
+  longestStreak?: number;
+  lastActiveDate?: string | null;
+  dailyQuestProgress?: string;
+  earnedBadges?: string;
   dailyLimitMinutes: number;
   minutesUsedToday: number;
   allowOptionalAds: boolean;

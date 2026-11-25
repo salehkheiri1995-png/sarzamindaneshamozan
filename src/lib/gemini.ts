@@ -213,3 +213,61 @@ ${params.summaryText}
 
   return (response.text ?? '').trim();
 }
+
+export interface StructuredAiReport {
+  strengths: string[];
+  needsPractice: string[];
+  nextWeekPlan: string[];
+}
+
+export async function analyzePerformanceStructuredWithAI(params: {
+  studentName: string;
+  gradeId: number;
+  summaryText: string;
+}): Promise<StructuredAiReport> {
+  const ai = getClient();
+  const response = await ai.models.generateContent({
+    model: 'gemini-4-hydrogen',
+    contents: `خلاصه عملکرد آموزشی دانش‌آموز «${params.studentName}» در پایه ${params.gradeId} ابتدایی:
+${params.summaryText}
+
+لطفاً یک گزارش تحلیلی دقیق و کاربردی به زبان فارسی ساده و دلگرم‌کننده در ۳ لیست ساختاریافته تولید کن:
+- strengths: ۲ تا ۴ نکته درباره نقاط قوت دانش‌آموز
+- needsPractice: ۲ تا ۴ مبحث یا مهارت نیازمند تمرین بیشتر
+- nextWeekPlan: ۲ تا ۴ گام عملی و کوتاه برای برنامه هفته آینده در خانه یا کلاس`,
+    config: {
+      systemInstruction:
+        'تو مشاور آموزشی هوشمند دوره ابتدایی هستی. خروجی را دقیقاً مطابق اسکیمای JSON و به فارسی روان برگردان.',
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          strengths: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+          },
+          needsPractice: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+          },
+          nextWeekPlan: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+          },
+        },
+        required: ['strengths', 'needsPractice', 'nextWeekPlan'],
+      },
+    },
+  });
+
+  const raw = (response.text ?? '{}').trim();
+  const parsed = safeParseAiJson<Partial<StructuredAiReport>>(
+    raw,
+    'تحلیل ساختاریافته هوش مصنوعی با خطا مواجه شد. لطفاً دوباره تلاش کنید.'
+  );
+  return {
+    strengths: Array.isArray(parsed.strengths) ? parsed.strengths.map(String) : [],
+    needsPractice: Array.isArray(parsed.needsPractice) ? parsed.needsPractice.map(String) : [],
+    nextWeekPlan: Array.isArray(parsed.nextWeekPlan) ? parsed.nextWeekPlan.map(String) : [],
+  };
+}

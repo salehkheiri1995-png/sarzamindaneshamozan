@@ -1,5 +1,13 @@
-import React, { useState } from 'react';
-import { StudentWorldData, MissionItem, TeacherVideoItem } from '../../types/game';
+import React, { useCallback, useEffect, useState } from 'react';
+import { motion } from 'motion/react';
+import {
+  AdaptivePracticeData,
+  LeaderboardClassroom,
+  MissionItem,
+  StudentWorldData,
+  TeacherVideoItem,
+} from '../../types/game';
+import { StudentProfile } from '../../context/AuthContext';
 import {
   GRADES,
   REALMS,
@@ -9,9 +17,18 @@ import {
   DIFFICULTY_LABELS,
   formatPersianDigits,
 } from '../../shared/curriculum';
+import {
+  BadgeDefinition,
+  getHeroLevel,
+  normalizeDailyQuestState,
+  toPersianDigits,
+} from '../../shared/gamification';
 import { HeroAvatarSvg } from './HeroAvatarSvg';
+import { ConfettiBurst } from './ConfettiBurst';
+import { BadgeShowcase } from './BadgeShowcase';
 import { soundEngine } from '../../lib/sound';
 import { apiFetch } from '../../lib/api';
+import { useToast } from '../../context/ToastContext';
 import {
   Compass,
   Play,
@@ -25,6 +42,15 @@ import {
   GraduationCap,
   Lock,
   Link2,
+  Flame,
+  Sparkles,
+  Trophy,
+  Crown,
+  Gift,
+  Star,
+  BookOpenCheck,
+  ClipboardCheck,
+  AlertCircle,
 } from 'lucide-react';
 
 interface WorldHubProps {
@@ -32,6 +58,10 @@ interface WorldHubProps {
   isDemoMode?: boolean;
   onRefresh?: () => void;
   onSelectMission: (mission: MissionItem) => void;
+  onGoToHomework?: () => void;
+  onGoToExams?: () => void;
+  onStudentUpdate?: (student: StudentProfile) => void;
+  onBadgesUnlocked?: (badges: BadgeDefinition[]) => void;
 }
 
 export function WorldHub({
@@ -39,7 +69,12 @@ export function WorldHub({
   isDemoMode = false,
   onRefresh,
   onSelectMission,
+  onGoToHomework,
+  onGoToExams,
+  onStudentUpdate,
+  onBadgesUnlocked,
 }: WorldHubProps) {
+  const { showToast } = useToast();
   const [selectedRealmId, setSelectedRealmId] = useState<RealmId | null>(null);
   const [activeVideo, setActiveVideo] = useState<TeacherVideoItem | null>(null);
   const [videoQuizChoice, setVideoQuizChoice] = useState<string | null>(null);
@@ -49,9 +84,78 @@ export function WorldHub({
   const [joinLoading, setJoinLoading] = useState(false);
   const [joinFeedback, setJoinFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
+  const [claimingQuest, setClaimingQuest] = useState(false);
+  const [questConfetti, setQuestConfetti] = useState(false);
+  const [adaptiveData, setAdaptiveData] = useState<AdaptivePracticeData | null>(null);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardClassroom[]>([]);
+
+  const loadExtras = useCallback(async () => {
+    if (isDemoMode || !world.student?.id) return;
+    try {
+      const [adapt, lb] = await Promise.all([
+        apiFetch<AdaptivePracticeData>(`/api/students/${world.student.id}/adaptive-practice`),
+        apiFetch<{ classrooms: LeaderboardClassroom[] }>(
+          `/api/students/${world.student.id}/leaderboard`
+        ),
+      ]);
+      setAdaptiveData(adapt);
+      setLeaderboard(lb.classrooms || []);
+    } catch {
+      // silent fallback
+    }
+  }, [isDemoMode, world.student?.id]);
+
+  useEffect(() => {
+    loadExtras();
+  }, [loadExtras, world.attempts.length, world.enrollments.length]);
+
   const gradeInfo = GRADES.find((g) => g.id === world.student.gradeId) || GRADES[0];
   const recommendedMission = world.missions.find((m) => m.id === world.recommendedMissionId) || world.missions[0];
   const needsBreak = world.student.minutesUsedToday >= world.student.dailyLimitMinutes;
+  const heroLevel = getHeroLevel(world.student.xp);
+  const currentStreak = Math.max(1, world.student.currentStreak || world.student.streakDays || 1);
+  const todayStr = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
+  const dailyQuest = normalizeDailyQuestState(world.student.dailyQuestProgress, todayStr);
+  const questPct = Math.min(100, Math.round((dailyQuest.progress / Math.max(1, dailyQuest.target)) * 100));
+  const earnedBadges: string[] = (() => {
+    try {
+      return JSON.parse(world.student.earnedBadges || '[]');
+    } catch {
+      return [];
+    }
+  })();
+
+  const handleClaimDailyQuest = async () => {
+    if (isDemoMode || claimingQuest || !dailyQuest.completed || dailyQuest.claimed) return;
+    setClaimingQuest(true);
+    try {
+      const res = await apiFetch<{
+        student: StudentProfile;
+        newlyUnlockedBadges?: BadgeDefinition[];
+        rewardCoins: number;
+        rewardXp: number;
+      }>(`/api/students/${world.student.id}/daily-quest/claim`, { method: 'POST' });
+      soundEngine.playVictory();
+      setQuestConfetti(true);
+      setTimeout(() => setQuestConfetti(false), 1400);
+      onStudentUpdate?.(res.student);
+      if (res.newlyUnlockedBadges?.length) {
+        onBadgesUnlocked?.(res.newlyUnlockedBadges);
+      }
+      showToast(
+        `آفرین! جایزه چالش روزانه (+${toPersianDigits(res.rewardCoins)} سکه و +${toPersianDigits(res.rewardXp)} XP) به حسابت اضافه شد!`,
+        'success'
+      );
+      onRefresh?.();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'دریافت جایزه چالش انجام نشد.', 'error');
+    } finally {
+      setClaimingQuest(false);
+    }
+  };
 
   const handleStudentJoinClass = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -92,6 +196,20 @@ export function WorldHub({
   const realmMissions = selectedRealm
     ? world.missions.filter((m) => m.realmId === selectedRealm.id)
     : [];
+
+  const pendingHomeworks = world.homeworks.filter(
+    (h) => !h.submission || h.submission.status === 'needs_revision'
+  );
+  const takenExamIds = new Set((world.examAttempts || []).map((a) => a.examId));
+  const pendingExams = world.exams.filter((e) => !takenExamIds.has(e.id));
+  const teacherMissions = world.missions.filter(
+    (m) =>
+      m.classroomId != null ||
+      m.contentSource === 'teacher' ||
+      m.contentSource === 'ai_generated'
+  );
+  const hasTeacherTasks =
+    pendingHomeworks.length > 0 || pendingExams.length > 0 || teacherMissions.length > 0;
 
   // Realm Detail View
   if (selectedRealm) {
@@ -154,12 +272,22 @@ export function WorldHub({
                   className="rounded-2xl border border-[#E5DAC5] bg-white p-5 flex flex-col justify-between gap-4 hover:border-amber-500 transition-colors"
                 >
                   <div className="space-y-2">
-                    <div className="flex items-center justify-between text-xs font-semibold text-stone-500">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold text-stone-500">
                       <span>{m.chapterId}</span>
                       <span>
                         {QUESTION_TYPE_LABELS[m.questionType]} · {DIFFICULTY_LABELS[m.difficulty]}
                       </span>
                     </div>
+                    {(m.classroomId != null ||
+                      m.contentSource === 'teacher' ||
+                      m.contentSource === 'ai_generated') && (
+                      <p className="text-[11px] font-bold text-teal-800 inline-flex items-center gap-1">
+                        <GraduationCap className="h-3.5 w-3.5" />
+                        <span>
+                          سؤال معلم کلاس{m.classroomName ? ` (${m.classroomName})` : ''}
+                        </span>
+                      </p>
+                    )}
                     <h4 className="text-base font-extrabold text-stone-900">{m.topicId}</h4>
                     <p className="text-sm text-stone-600 leading-relaxed">{m.storyIntro}</p>
                   </div>
@@ -224,6 +352,257 @@ export function WorldHub({
         </div>
       )}
 
+      {/* Hero Level, Daily Streak & Daily Quest Strip */}
+      <section className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <div className="lg:col-span-5 rounded-3xl border border-[#E5DAC5] bg-white p-5 flex flex-col justify-between gap-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-100 text-orange-600">
+                <motion.div
+                  animate={{ scale: [1, 1.12, 1] }}
+                  transition={{ duration: 2.2, repeat: Infinity }}
+                >
+                  <Flame className="h-6 w-6" />
+                </motion.div>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-stone-500">استریک فعالیت پیوسته</p>
+                <p className="tabular-nums text-lg font-extrabold text-stone-900">
+                  {toPersianDigits(currentStreak)} روز متوالی
+                </p>
+              </div>
+            </div>
+            <div className="text-left">
+              <span className="text-xs font-bold text-teal-800">
+                سطح {toPersianDigits(heroLevel.level)}: {heroLevel.title}
+              </span>
+              <p className="tabular-nums text-[11px] text-stone-500">
+                {toPersianDigits(heroLevel.xpToNext)} XP تا سطح بعدی
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-[11px] font-bold text-stone-600 tabular-nums">
+              <span className="inline-flex items-center gap-1">
+                <Star className="h-3.5 w-3.5 text-amber-500" />
+                نوار پیشرفت تجربه (XP)
+              </span>
+              <span>
+                {toPersianDigits(heroLevel.currentLevelXp)} / {toPersianDigits(heroLevel.xpPerLevel)}
+              </span>
+            </div>
+            <div className="h-3 w-full overflow-hidden rounded-full bg-[#EFE6D5]">
+              <motion.div
+                initial={{ width: 0 }}
+                animate={{ width: `${heroLevel.progressPct}%` }}
+                transition={{ duration: 0.6, ease: 'easeOut' }}
+                className="h-full rounded-full bg-gradient-to-l from-amber-500 to-teal-600"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="relative lg:col-span-7 overflow-hidden rounded-3xl border border-amber-300 bg-gradient-to-l from-amber-50/90 via-white to-[#FBF7EF] p-5 flex flex-col justify-between gap-4">
+          <ConfettiBurst active={questConfetti} />
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-amber-500 text-stone-950 shadow-xs">
+                <Gift className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="text-xs font-extrabold text-amber-800">چالش روزانه امروز</p>
+                <h3 className="text-base font-extrabold text-stone-900">{dailyQuest.title}</h3>
+                <p className="mt-0.5 text-xs text-stone-600">{dailyQuest.description}</p>
+              </div>
+            </div>
+
+            {!isDemoMode && (
+              <button
+                type="button"
+                disabled={!dailyQuest.completed || dailyQuest.claimed || claimingQuest}
+                onClick={handleClaimDailyQuest}
+                className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-2xl px-4 py-2.5 text-xs font-extrabold transition ${
+                  dailyQuest.claimed
+                    ? 'border border-emerald-200 bg-emerald-50 text-emerald-800'
+                    : dailyQuest.completed
+                      ? 'bg-amber-500 text-stone-950 shadow-md hover:bg-amber-400 animate-pulse cursor-pointer'
+                      : 'bg-[#EFE6D5] text-stone-500 cursor-not-allowed'
+                }`}
+              >
+                <Gift className="h-4 w-4" />
+                {dailyQuest.claimed
+                  ? 'جایزه امروز دریافت شد ✓'
+                  : claimingQuest
+                    ? 'در حال ثبت...'
+                    : 'دریافت جایزه (۵۰ سکه + ۱۰۰ XP)'}
+              </button>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-xs font-bold text-stone-700 tabular-nums">
+              <span>پیشرفت چالش امروز</span>
+              <span>
+                {toPersianDigits(dailyQuest.progress)} از {toPersianDigits(dailyQuest.target)} مأموریت
+              </span>
+            </div>
+            <div className="h-3 w-full overflow-hidden rounded-full bg-[#EFE6D5]">
+              <motion.div
+                initial={{ width: 0 }}
+                animate={{ width: `${questPct}%` }}
+                transition={{ duration: 0.55 }}
+                className="h-full rounded-full bg-gradient-to-l from-emerald-500 to-amber-500"
+              />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Teacher Class Tasks: Pending / Revision Homeworks, Unattempted Exams & Teacher Questions */}
+      {hasTeacherTasks && (
+        <section className="rounded-3xl border border-teal-200 bg-white p-5 sm:p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-teal-50 text-teal-700 border border-teal-100">
+                <GraduationCap className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 className="text-base sm:text-lg font-extrabold text-stone-900">
+                  برنامه، تکالیف، آزمون‌ها و سؤالات معلم کلاس
+                </h2>
+                <p className="text-xs text-stone-600">
+                  موارد ارسال‌شده توسط معلم را همین‌جا انجام بده؛ پاسخ‌های تو بلافاصله برای معلم ارسال می‌شوند.
+                </p>
+              </div>
+            </div>
+            <span className="text-xs font-bold text-teal-800 tabular-nums">
+              {toPersianDigits(pendingHomeworks.length + pendingExams.length + teacherMissions.filter((m) => !m.completed).length)}{' '}
+              مورد در انتظار پاسخ
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {pendingHomeworks.map((hw) => {
+              const needsRev = hw.submission?.status === 'needs_revision';
+              return (
+                <div
+                  key={`hw-${hw.id}`}
+                  className={`rounded-2xl border p-4 flex flex-col justify-between gap-3 ${
+                    needsRev
+                      ? 'border-amber-400 bg-amber-50/50'
+                      : 'border-[#EFE6D5] bg-[#FBF7EF]'
+                  }`}
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2 text-[11px] font-bold">
+                      <span className={needsRev ? 'text-amber-800 inline-flex items-center gap-1' : 'text-teal-800 inline-flex items-center gap-1'}>
+                        {needsRev ? (
+                          <>
+                            <AlertCircle className="h-3.5 w-3.5" />
+                            نیازمند اصلاح و ارسال مجدد
+                          </>
+                        ) : (
+                          <>
+                            <BookOpenCheck className="h-3.5 w-3.5" />
+                            تکلیف معلم
+                          </>
+                        )}
+                      </span>
+                      <span className="text-stone-500 tabular-nums">مهلت: {hw.dueDate}</span>
+                    </div>
+                    <p className="text-sm font-extrabold text-stone-900 line-clamp-1">{hw.title}</p>
+                    <p className="text-xs text-stone-600 line-clamp-1">
+                      {hw.classroomName ? `کلاس ${hw.classroomName} · ` : ''}
+                      {toPersianDigits(hw.questions.length)} تمرین
+                    </p>
+                    {needsRev && hw.submission?.teacherFeedback && (
+                      <p className="text-[11px] font-semibold text-amber-900 line-clamp-2">
+                        بازخورد معلم: {hw.submission.teacherFeedback}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onGoToHomework?.()}
+                    className="w-full rounded-xl bg-teal-700 hover:bg-teal-800 px-3.5 py-2 text-xs font-extrabold text-white cursor-pointer whitespace-nowrap"
+                  >
+                    {needsRev ? 'اصلاح و ارسال مجدد' : 'شروع مأموریت تکلیف'}
+                  </button>
+                </div>
+              );
+            })}
+
+            {pendingExams.map((ex) => (
+              <div
+                key={`exam-${ex.id}`}
+                className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4 flex flex-col justify-between gap-3"
+              >
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-indigo-800">
+                    <span className="inline-flex items-center gap-1">
+                      <ClipboardCheck className="h-3.5 w-3.5" />
+                      آزمون در انتظار شرکت
+                    </span>
+                    <span className="text-stone-500 tabular-nums">
+                      {toPersianDigits(ex.durationMinutes)} دقیقه
+                    </span>
+                  </div>
+                  <p className="text-sm font-extrabold text-stone-900 line-clamp-1">{ex.title}</p>
+                  <p className="text-xs text-stone-600 tabular-nums">
+                    {ex.classroomName ? `کلاس ${ex.classroomName} · ` : ''}
+                    {toPersianDigits(ex.questions.length)} سؤال · بارم {toPersianDigits(ex.maxScore)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onGoToExams?.()}
+                  className="w-full rounded-xl bg-indigo-700 hover:bg-indigo-800 px-3.5 py-2 text-xs font-extrabold text-white cursor-pointer whitespace-nowrap"
+                >
+                  شرکت در آزمون
+                </button>
+              </div>
+            ))}
+
+            {teacherMissions.map((m) => (
+              <div
+                key={`tm-${m.id}`}
+                className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4 flex flex-col justify-between gap-3"
+              >
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2 text-[11px] font-bold">
+                    <span className="text-amber-900 inline-flex items-center gap-1">
+                      <GraduationCap className="h-3.5 w-3.5" />
+                      سؤال معلم{m.classroomName ? ` · ${m.classroomName}` : ''}
+                    </span>
+                    {m.completed ? (
+                      <span className="text-emerald-700 inline-flex items-center gap-1">
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        پاسخ داده شده
+                      </span>
+                    ) : (
+                      <span className="text-amber-800">در انتظار پاسخ</span>
+                    )}
+                  </div>
+                  <p className="text-sm font-extrabold text-stone-900 line-clamp-1">{m.topicId}</p>
+                  <p className="text-xs text-stone-700 line-clamp-2">{m.promptText}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playClick();
+                    onSelectMission(m);
+                  }}
+                  className="w-full rounded-xl bg-amber-600 hover:bg-amber-700 px-3.5 py-2 text-xs font-extrabold text-white cursor-pointer whitespace-nowrap"
+                >
+                  {m.completed ? 'مرور دوباره' : 'پاسخ به سؤال معلم'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Smart Anti-Repetition Recommended Next Mission Strip */}
       {recommendedMission && (
         <section className="rounded-3xl border border-[#E5DAC5] bg-white p-5 sm:p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
@@ -258,6 +637,60 @@ export function WorldHub({
             <Compass className="h-5 w-5" />
             <span>شروع مأموریت پیشنهادی</span>
           </button>
+        </section>
+      )}
+
+      {/* Adaptive Smart Practice Mode Card */}
+      {!isDemoMode && adaptiveData && adaptiveData.missions.length > 0 && (
+        <section className="rounded-3xl border border-indigo-200 bg-gradient-to-l from-indigo-50/70 via-white to-teal-50/50 p-5 sm:p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-indigo-600 text-white shadow-xs">
+                <Sparkles className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base sm:text-lg font-extrabold text-stone-900">
+                  تمرین هوشمند اختصاصی تو
+                </h3>
+                <p className="text-xs text-stone-600 mt-0.5">
+                  {adaptiveData.weakTopics.length > 0
+                    ? `چند مأموریت هدفمند روی مباحث نیازمند تمرین (${adaptiveData.weakTopics.join('، ')}) برایت چیدیم:`
+                    : 'سؤال‌های منتخب پایه تحصیلی تو برای تسلط و مرور بیشتر آماده شده‌اند:'}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                soundEngine.playClick();
+                onSelectMission(adaptiveData.missions[0]);
+              }}
+              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-2xl bg-indigo-600 px-4 py-2.5 text-xs font-extrabold text-white hover:bg-indigo-700 cursor-pointer"
+            >
+              <Play className="h-4 w-4" />
+              شروع تمرین هوشمند
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {adaptiveData.missions.slice(0, 3).map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => {
+                  soundEngine.playClick();
+                  onSelectMission(m);
+                }}
+                className="rounded-2xl border border-indigo-100 bg-white p-3.5 text-right hover:border-indigo-400 transition cursor-pointer"
+              >
+                <p className="text-[11px] font-bold text-indigo-700">{m.chapterId}</p>
+                <p className="mt-1 text-xs font-extrabold text-stone-900 line-clamp-1">
+                  {m.topicId}
+                </p>
+                <p className="mt-1 text-[11px] text-stone-500 line-clamp-1">{m.promptText}</p>
+              </button>
+            ))}
+          </div>
         </section>
       )}
 
@@ -434,6 +867,106 @@ export function WorldHub({
           )}
         </section>
       )}
+
+      {/* Safe Classroom Leaderboard (Only nickname, heroClass, avatar, xp, rank — zero PII) */}
+      {!isDemoMode && leaderboard.length > 0 && (
+        <section className="space-y-4">
+          {leaderboard.map((clsLb) => {
+            const top3 = clsLb.rankings.slice(0, 3);
+            return (
+              <div
+                key={clsLb.classroomId}
+                className="rounded-3xl border border-[#E5DAC5] bg-white p-6 space-y-5"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Trophy className="h-5 w-5 text-amber-600" />
+                    <h3 className="text-lg font-extrabold text-stone-900">
+                      جدول قهرمانان کلاس «{clsLb.classroomName}»
+                    </h3>
+                  </div>
+                  <span className="text-xs font-semibold text-stone-500">
+                    رتبه‌بندی دوستانه بر اساس امتیاز تجربه (XP)
+                  </span>
+                </div>
+
+                {/* Top 3 Podium */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {top3.map((entry) => {
+                    const medalStyle =
+                      entry.rank === 1
+                        ? 'border-amber-300 bg-amber-50/90 text-amber-800'
+                        : entry.rank === 2
+                          ? 'border-stone-300 bg-stone-50 text-stone-700'
+                          : 'border-orange-200 bg-orange-50/70 text-orange-800';
+                    return (
+                      <div
+                        key={`${clsLb.classroomId}-${entry.rank}`}
+                        className={`rounded-2xl border p-4 flex items-center justify-between gap-3 ${medalStyle} ${
+                          entry.isSelf ? 'ring-2 ring-teal-500' : ''
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div
+                            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white font-extrabold text-sm shadow-xs"
+                            style={{ backgroundColor: entry.avatarColor }}
+                          >
+                            {toPersianDigits(entry.rank)}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-extrabold text-stone-900 truncate">
+                              {entry.nickname} {entry.isSelf ? '(تو)' : ''}
+                            </p>
+                            <p className="tabular-nums text-xs font-bold opacity-80">
+                              {toPersianDigits(entry.xp)} XP
+                            </p>
+                          </div>
+                        </div>
+                        <Crown className="h-5 w-5 shrink-0" />
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Remaining Ranks */}
+                {clsLb.rankings.length > 3 && (
+                  <div className="space-y-1.5">
+                    {clsLb.rankings.slice(3, 10).map((entry) => (
+                      <div
+                        key={`${clsLb.classroomId}-row-${entry.rank}`}
+                        className={`flex items-center justify-between rounded-xl border px-4 py-2.5 text-xs ${
+                          entry.isSelf
+                            ? 'border-teal-400 bg-teal-50 font-extrabold text-teal-950'
+                            : 'border-[#EFE6D5] bg-[#FBF7EF]/60 font-semibold text-stone-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="tabular-nums w-6 text-center font-extrabold">
+                            #{toPersianDigits(entry.rank)}
+                          </span>
+                          <span
+                            className="h-3 w-3 rounded-full shrink-0"
+                            style={{ backgroundColor: entry.avatarColor }}
+                          />
+                          <span>
+                            {entry.nickname} {entry.isSelf ? '(تو)' : ''}
+                          </span>
+                        </div>
+                        <span className="tabular-nums font-extrabold">
+                          {toPersianDigits(entry.xp)} XP
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </section>
+      )}
+
+      {/* Compact Trophy Shelf */}
+      <BadgeShowcase earnedIds={earnedBadges} compact title="نشان‌ها و افتخارات من" />
 
       {/* Teacher Videos & Classroom Safe Announcements (Always Visible Section) */}
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">

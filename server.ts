@@ -2,10 +2,13 @@ import 'dotenv/config';
 import express, { NextFunction, Request, Response } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { sql } from 'drizzle-orm';
+import { db } from './src/db/index.ts';
 import { authRouter } from './src/routes/auth.ts';
 import { studentsRouter } from './src/routes/students.ts';
 import { teacherRouter } from './src/routes/teacher.ts';
 import { adminRouter } from './src/routes/admin.ts';
+import { notificationsRouter } from './src/routes/notifications.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,10 +48,31 @@ app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
   return next(err);
 });
 
+app.get('/api/health', async (_req: Request, res: Response) => {
+  try {
+    await db.execute(sql`SELECT 1`);
+    res.json({
+      ok: true,
+      status: 'healthy',
+      db: 'connected',
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('GET /api/health failed:', error);
+    res.status(503).json({
+      ok: false,
+      status: 'degraded',
+      db: 'disconnected',
+      timestamp: new Date().toISOString(),
+    });
+  }
+});
+
 app.use('/api', authRouter);
 app.use('/api', studentsRouter);
 app.use('/api', teacherRouter);
 app.use('/api', adminRouter);
+app.use('/api', notificationsRouter);
 
 async function startServer() {
   const PORT = Number(process.env.PORT) || 3000;

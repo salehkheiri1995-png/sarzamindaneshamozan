@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { StudentProfile, useAuth } from '../../context/AuthContext';
-import { StudentWorldData } from '../../types/game';
+import { useToast } from '../../context/ToastContext';
+import { StudentWorldData, StructuredAiReport } from '../../types/game';
 import { BookId, GRADES, REALMS, formatPersianDigits } from '../../shared/curriculum';
 import { apiFetch } from '../../lib/api';
 import { soundEngine } from '../../lib/sound';
 import { HeroAvatarSvg } from '../game/HeroAvatarSvg';
+import { BadgeShowcase } from '../game/BadgeShowcase';
+import { SkeletonLoader } from '../common/SkeletonLoader';
 import { ChangePasswordCard } from './ChangePasswordCard';
 import {
   UserPlus,
@@ -26,6 +29,11 @@ import {
   AlertTriangle,
   LogOut,
   ShieldCheck,
+  Printer,
+  BarChart3,
+  RefreshCw,
+  Flame,
+  Calendar,
 } from 'lucide-react';
 
 interface ParentPanelProps {
@@ -48,6 +56,7 @@ export function ParentPanel({
   onStudentUpdate,
 }: ParentPanelProps) {
   const { dbUser, refreshProfile, globalAnnouncements: authGlobalAnnouncements } = useAuth();
+  const { showToast } = useToast();
   const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly'>('weekly');
   const [joinCode, setJoinCode] = useState('');
   const [joinMsg, setJoinMsg] = useState<string | null>(null);
@@ -68,8 +77,9 @@ export function ParentPanel({
   const [hwDueDate, setHwDueDate] = useState('۱۴۰۴/۰۹/۱۵');
   const [hwMsg, setHwMsg] = useState<string | null>(null);
 
-  // AI Progress Analyzer
-  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
+  // Structured AI Progress Analyzer (24h cached on server)
+  const [aiReport, setAiReport] = useState<StructuredAiReport | null>(null);
+  const [aiMeta, setAiMeta] = useState<{ cached: boolean; generatedAt?: string } | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
 
@@ -87,7 +97,9 @@ export function ParentPanel({
     setChildPassword('');
     setCredMsg(null);
     setSettingsMsg(null);
-    setAiAnalysis(null);
+    setAiReport(null);
+    setAiMeta(null);
+    setAiError(null);
   }, [activeStudent?.id, activeStudent?.nickname, activeStudent?.username]);
 
   const globalNotices = world?.globalAnnouncements || authGlobalAnnouncements || [];
@@ -187,9 +199,13 @@ export function ParentPanel({
       soundEngine.playCorrect();
       onStudentUpdate(res.student);
       onRefresh();
-      setSettingsMsg('تنظیمات پروفایل دانش‌آموز ذخیره شد و بلافاصله در پنل دانش‌آموز اعمال گردید.');
+      const okMsg = 'تنظیمات پروفایل دانش‌آموز ذخیره شد و بلافاصله در پنل دانش‌آموز اعمال گردید.';
+      setSettingsMsg(okMsg);
+      showToast('تنظیمات فرزند ذخیره شد.', 'success');
     } catch (err) {
-      setSettingsMsg(err instanceof Error ? err.message : 'بروزرسانی تنظیمات ناموفق بود.');
+      const msg = err instanceof Error ? err.message : 'بروزرسانی تنظیمات ناموفق بود.';
+      setSettingsMsg(msg);
+      showToast(msg, 'error');
     } finally {
       setSavingSettings(false);
     }
@@ -212,9 +228,13 @@ export function ParentPanel({
       soundEngine.playVictory();
       onStudentUpdate(res.student);
       setChildPassword('');
-      setCredMsg(`مشخصات و اطلاعات ورود «${res.student.nickname}» با موفقیت ذخیره شد.`);
+      const okMsg = `مشخصات و اطلاعات ورود «${res.student.nickname}» با موفقیت ذخیره شد.`;
+      setCredMsg(okMsg);
+      showToast(okMsg, 'success');
     } catch (err) {
-      setCredMsg(err instanceof Error ? err.message : 'ذخیره اطلاعات فرزند ناموفق بود.');
+      const msg = err instanceof Error ? err.message : 'ذخیره اطلاعات فرزند ناموفق بود.';
+      setCredMsg(msg);
+      showToast(msg, 'error');
     } finally {
       setSavingCreds(false);
     }
@@ -234,14 +254,16 @@ export function ParentPanel({
       );
       soundEngine.playVictory();
       setJoinCode('');
-      setJoinMsg(
-        res.alreadyJoined
-          ? `فرزند شما قبلاً عضو کلاس «${res.classroom.name}» است.`
-          : `عضویت در کلاس «${res.classroom.name}» با تأیید والدین انجام شد!`
-      );
+      const msg = res.alreadyJoined
+        ? `فرزند شما قبلاً عضو کلاس «${res.classroom.name}» است.`
+        : `عضویت در کلاس «${res.classroom.name}» با تأیید والدین انجام شد!`;
+      setJoinMsg(msg);
+      showToast(msg, 'success');
       onRefresh();
     } catch (err) {
-      setJoinMsg(err instanceof Error ? err.message : 'اتصال به کلاس ناموفق بود.');
+      const msg = err instanceof Error ? err.message : 'اتصال به کلاس ناموفق بود.';
+      setJoinMsg(msg);
+      showToast(msg, 'error');
     }
   };
 
@@ -263,24 +285,40 @@ export function ParentPanel({
       soundEngine.playVictory();
       setHwTitle('');
       setHwDesc('');
-      setHwMsg('تکلیف خانگی ثبت شد و در دفتر مأموریت‌های فرزند شما نمایش داده می‌شود.');
+      const msg = 'تکلیف خانگی ثبت شد و در دفتر مأموریت‌های فرزند شما نمایش داده می‌شود.';
+      setHwMsg(msg);
+      showToast(msg, 'success');
       onRefresh();
     } catch (err) {
-      setHwMsg(err instanceof Error ? err.message : 'ثبت تکلیف خانگی ناموفق بود.');
+      const msg = err instanceof Error ? err.message : 'ثبت تکلیف خانگی ناموفق بود.';
+      setHwMsg(msg);
+      showToast(msg, 'error');
     }
   };
 
-  const handleAnalyzeWithAI = async () => {
+  const handleAnalyzeWithAI = async (forceRefresh = false) => {
     setAiLoading(true);
     setAiError(null);
     try {
-      const res = await apiFetch<{ analysis: string }>('/api/ai/analyze-progress', {
+      const res = await apiFetch<{
+        report: StructuredAiReport;
+        cached: boolean;
+        generatedAt?: string;
+      }>(`/api/students/${activeStudent.id}/ai-report`, {
         method: 'POST',
-        body: JSON.stringify({ studentId: activeStudent.id }),
+        body: JSON.stringify({ forceRefresh }),
       });
-      setAiAnalysis(res.analysis);
+      setAiReport(res.report);
+      setAiMeta({ cached: res.cached, generatedAt: res.generatedAt });
+      soundEngine.playCorrect();
+      showToast(
+        res.cached ? 'گزارش هوشمند ذخیره شده بارگذاری شد.' : 'تحلیل هوشمند جدید با موفقیت تولید شد.',
+        'success'
+      );
     } catch (err) {
-      setAiError(err instanceof Error ? err.message : 'دریافت تحلیل هوشمند ناموفق بود.');
+      const msg = err instanceof Error ? err.message : 'دریافت تحلیل هوشمند ناموفق بود.';
+      setAiError(msg);
+      showToast(msg, 'error');
     } finally {
       setAiLoading(false);
     }
@@ -293,6 +331,7 @@ export function ParentPanel({
       if (confirmAction.kind === 'delete_student') {
         await apiFetch(`/api/students/${confirmAction.studentId}`, { method: 'DELETE' });
         soundEngine.playClick();
+        showToast(`پروفایل «${confirmAction.nickname}» حذف شد.`, 'info');
         setConfirmAction(null);
         await refreshProfile();
       } else if (confirmAction.kind === 'unenroll_class') {
@@ -302,11 +341,15 @@ export function ParentPanel({
         );
         soundEngine.playClick();
         setConfirmAction(null);
-        setJoinMsg(`فرزند شما از کلاس «${confirmAction.classroomName}» خارج شد.`);
+        const msg = `فرزند شما از کلاس «${confirmAction.classroomName}» خارج شد.`;
+        setJoinMsg(msg);
+        showToast(msg, 'info');
         onRefresh();
       }
     } catch (err) {
-      setJoinMsg(err instanceof Error ? err.message : 'اجرای عملیات با خطا مواجه شد.');
+      const msg = err instanceof Error ? err.message : 'اجرای عملیات با خطا مواجه شد.';
+      setJoinMsg(msg);
+      showToast(msg, 'error');
       setConfirmAction(null);
     } finally {
       setConfirmBusy(false);
@@ -364,9 +407,60 @@ export function ParentPanel({
     (ea) => ea.teacherFeedback || ea.teacherScore !== null
   );
 
+  // Weekly 7-day activity data for SVG bar chart
+  const weeklyDays = (() => {
+    const out: Array<{ key: string; label: string; total: number; correct: number }> = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 86400000);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const key = `${y}-${m}-${day}`;
+      let label = key.slice(5);
+      try {
+        label = new Intl.DateTimeFormat('fa-IR', { weekday: 'short' }).format(d);
+      } catch {
+        // fallback
+      }
+      const dayAttempts = allAttempts.filter((a) => {
+        const created = new Date(a.createdAt);
+        if (Number.isNaN(created.getTime())) return false;
+        const cy = created.getFullYear();
+        const cm = String(created.getMonth() + 1).padStart(2, '0');
+        const cday = String(created.getDate()).padStart(2, '0');
+        return `${cy}-${cm}-${cday}` === key;
+      });
+      out.push({
+        key,
+        label,
+        total: dayAttempts.length,
+        correct: dayAttempts.filter((a) => a.isCorrect).length,
+      });
+    }
+    return out;
+  })();
+  const maxWeeklyDayCount = Math.max(1, ...weeklyDays.map((d) => d.total));
+
+  const bookAccuracyStats = REALMS.map((realm) => {
+    const bookAttempts = allAttempts.filter((a) => a.bookId === realm.bookId);
+    const correct = bookAttempts.filter((a) => a.isCorrect).length;
+    const accuracy = bookAttempts.length > 0 ? Math.round((correct / bookAttempts.length) * 100) : 0;
+    return {
+      realm,
+      total: bookAttempts.length,
+      correct,
+      accuracy,
+    };
+  });
+
+  const dailyLimitSafe = Math.max(1, activeStudent.dailyLimitMinutes || 45);
+  const screenTimePct = Math.min(100, Math.round((activeStudent.minutesUsedToday / dailyLimitSafe) * 100));
+  const screenTimeBarColor =
+    screenTimePct >= 95 ? 'bg-rose-500' : screenTimePct >= 75 ? 'bg-amber-500' : 'bg-emerald-600';
+
   return (
     <div className="space-y-7">
-      {renderParentAccountStatus()}
+      <div className="no-print">{renderParentAccountStatus()}</div>
 
       {/* Multi-Child Selector Header */}
       <section className="rounded-3xl border border-[#E5DAC5] bg-white p-6 flex flex-wrap items-center justify-between gap-4">
@@ -379,10 +473,18 @@ export function ParentPanel({
             size={68}
           />
           <div>
-            <h2 className="text-xl sm:text-2xl font-extrabold text-stone-900">
-              پنل جامع گزارش و مدیریت والدین
-            </h2>
-            <p className="text-sm text-stone-600">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-xl sm:text-2xl font-extrabold text-stone-900">
+                پنل جامع گزارش و مدیریت والدین
+              </h2>
+              {(activeStudent.currentStreak || 0) > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-xl border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-extrabold text-amber-800 whitespace-nowrap">
+                  <Flame className="h-3.5 w-3.5 text-amber-600" />
+                  <span>{formatPersianDigits(activeStudent.currentStreak || 0)} روز پیوسته</span>
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-stone-600 mt-0.5">
               فرزند انتخاب‌شده: <span className="font-bold text-stone-900">{activeStudent.nickname}</span> ·{' '}
               {GRADES.find((g) => g.id === activeStudent.gradeId)?.title}
               {activeStudent.username && ` · نام کاربری کودک: ${activeStudent.username}`}
@@ -390,13 +492,13 @@ export function ParentPanel({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="no-print flex flex-wrap items-center gap-2.5">
           {students.map((s) => (
             <button
               key={s.id}
               type="button"
               onClick={() => onSelectStudent(s.id)}
-              className={`rounded-xl px-4 py-2 text-sm font-bold transition-colors cursor-pointer ${
+              className={`rounded-xl px-4 py-2 text-sm font-bold transition-colors cursor-pointer whitespace-nowrap ${
                 s.id === activeStudent.id
                   ? 'bg-stone-900 text-white'
                   : 'border border-stone-300 bg-white text-stone-700 hover:bg-stone-50'
@@ -413,14 +515,34 @@ export function ParentPanel({
             <UserPlus className="h-4 w-4" />
             <span>افزودن فرزند دیگر</span>
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              soundEngine.playClick();
+              window.print();
+            }}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-teal-300 bg-teal-50 hover:bg-teal-100 px-4 py-2 text-sm font-bold text-teal-900 cursor-pointer whitespace-nowrap"
+          >
+            <Printer className="h-4 w-4" />
+            <span>چاپ کارنامه هفتگی</span>
+          </button>
         </div>
       </section>
 
-      {/* Timeframe Segmented Filter + Weekly Summary KPI Strip */}
-      <section className="space-y-3">
+      {/* Printable Weekly Report Summary + Visual Charts */}
+      <section className="printable-report space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h3 className="text-base font-extrabold text-stone-900">خلاصه پیشرفت هفتگی و عملکرد آموزشی</h3>
-          <div className="flex items-center gap-1 rounded-xl bg-[#EFE6D5] p-1">
+          <div>
+            <h3 className="text-base font-extrabold text-stone-900">
+              کارنامه پیشرفت هفتگی و عملکرد آموزشی — {activeStudent.nickname}
+            </h3>
+            <p className="hidden print:block text-xs text-stone-600 mt-0.5">
+              {GRADES.find((g) => g.id === activeStudent.gradeId)?.title} · استریک فعلی:{' '}
+              {formatPersianDigits(activeStudent.currentStreak || 0)} روز (رکورد:{' '}
+              {formatPersianDigits(activeStudent.longestStreak || 0)} روز)
+            </p>
+          </div>
+          <div className="no-print flex items-center gap-1 rounded-xl bg-[#EFE6D5] p-1">
             {(
               [
                 ['daily', 'گزارش روزانه'],
@@ -435,7 +557,7 @@ export function ParentPanel({
                   soundEngine.playClick();
                   setPeriod(k);
                 }}
-                className={`rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors cursor-pointer ${
+                className={`rounded-lg px-3.5 py-1.5 text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
                   period === k ? 'bg-white text-stone-950 shadow-xs' : 'text-stone-700'
                 }`}
               >
@@ -473,14 +595,90 @@ export function ParentPanel({
               {formatPersianDigits(examAttempts.length)} آزمون ثبت‌شده
             </p>
           </div>
-          <div className="rounded-2xl border border-[#E5DAC5] bg-white p-5">
-            <p className="text-xs font-semibold text-stone-500">زمان استفاده روزانه / بازه</p>
-            <p className="mt-1 text-xl sm:text-2xl font-extrabold text-stone-900 tabular-nums">
+          <div className="rounded-2xl border border-[#E5DAC5] bg-white p-5 space-y-2">
+            <p className="text-xs font-semibold text-stone-500">زمان استفاده روزانه</p>
+            <p className="text-xl sm:text-2xl font-extrabold text-stone-900 tabular-nums">
               {formatPersianDigits(period === 'daily' ? activeStudent.minutesUsedToday : periodMinutes)} دقیقه
             </p>
-            <p className="mt-1 text-[11px] font-semibold text-stone-500 tabular-nums">
-              سقف روزانه: {formatPersianDigits(activeStudent.dailyLimitMinutes)} دقیقه
-            </p>
+            <div className="space-y-1">
+              <div className="h-2 w-full rounded-full bg-[#EFE6D5] overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-300 ${screenTimeBarColor}`}
+                  style={{ width: `${screenTimePct}%` }}
+                />
+              </div>
+              <p className="text-[11px] font-semibold text-stone-500 tabular-nums">
+                امروز {formatPersianDigits(activeStudent.minutesUsedToday)} از سقف{' '}
+                {formatPersianDigits(activeStudent.dailyLimitMinutes)} دقیقه ({formatPersianDigits(screenTimePct)}٪)
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Visual Charts Row: 7-Day Activity Bar Chart + Per-Book Accuracy */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          <div className="lg:col-span-6 rounded-2xl border border-[#E5DAC5] bg-white p-5 space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <h4 className="text-sm font-extrabold text-stone-900 flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-teal-700" />
+                <span>نمودار فعالیت ۷ روز اخیر (مأموریت‌های حل‌شده)</span>
+              </h4>
+              <span className="text-[11px] font-semibold text-stone-500 tabular-nums">
+                مجموع هفته: {formatPersianDigits(weeklyDays.reduce((s, d) => s + d.total, 0))} تمرین
+              </span>
+            </div>
+            <div className="grid grid-cols-7 gap-2 items-end h-36 pt-4">
+              {weeklyDays.map((day) => {
+                const heightPct = day.total > 0 ? Math.max(14, Math.round((day.total / maxWeeklyDayCount) * 100)) : 6;
+                const correctPct = day.total > 0 ? Math.round((day.correct / day.total) * 100) : 0;
+                return (
+                  <div key={day.key} className="flex flex-col items-center justify-end h-full gap-1.5">
+                    <span className="text-[10px] font-extrabold text-stone-600 tabular-nums">
+                      {formatPersianDigits(day.total)}
+                    </span>
+                    <div className="w-full max-w-[34px] flex-1 flex items-end rounded-xl bg-[#FBF7EF] border border-[#EFE6D5] overflow-hidden p-0.5">
+                      <div
+                        title={`${day.label}: ${day.total} تمرین (${correctPct}٪ درست)`}
+                        className={`w-full rounded-lg transition-all duration-300 ${
+                          day.total > 0 ? 'bg-teal-600' : 'bg-[#E5DAC5]/60'
+                        }`}
+                        style={{ height: `${heightPct}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] font-bold text-stone-500 whitespace-nowrap">
+                      {day.label}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="lg:col-span-6 rounded-2xl border border-[#E5DAC5] bg-white p-5 space-y-3.5">
+            <h4 className="text-sm font-extrabold text-stone-900 flex items-center gap-2">
+              <BarChart3 className="h-4 w-4 text-amber-600" />
+              <span>نرخ دقت پاسخ‌گویی به تفکیک هر کتاب درسی</span>
+            </h4>
+            <div className="space-y-2.5">
+              {bookAccuracyStats.map(({ realm, total, correct, accuracy }) => (
+                <div key={realm.id} className="space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-stone-800">{realm.bookTitle}</span>
+                    <span className="font-bold text-stone-600 tabular-nums">
+                      {total > 0
+                        ? `${formatPersianDigits(accuracy)}٪ (${formatPersianDigits(correct)} از ${formatPersianDigits(total)})`
+                        : 'هنوز تمرینی ثبت نشده'}
+                    </span>
+                  </div>
+                  <div className="h-2.5 w-full rounded-full bg-[#EFE6D5] overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-300"
+                      style={{ width: `${accuracy}%`, backgroundColor: realm.accentHex }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </section>
@@ -704,7 +902,7 @@ export function ParentPanel({
           {/* Parent Home Homework Creator */}
           <form
             onSubmit={handleCreateHomeHomework}
-            className="rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-4"
+            className="no-print rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-4"
           >
             <h3 className="text-base font-extrabold text-stone-900 flex items-center gap-2">
               <PlusCircle className="h-5 w-5 text-teal-700" />
@@ -764,7 +962,7 @@ export function ParentPanel({
         </div>
 
         {/* Right: Child Profile Edit/Delete + Parental Controls + Classroom Join/Unenroll */}
-        <div className="lg:col-span-5 space-y-5">
+        <div className="no-print lg:col-span-5 space-y-5">
           {/* Child Profile & Independent Login Credentials */}
           <form
             onSubmit={handleSaveChildProfileAndCreds}
@@ -999,30 +1197,104 @@ export function ParentPanel({
         </div>
       </section>
 
-      {/* AI Smart Progress Analyzer for Parents */}
-      <section className="rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-4">
+      {/* Earned Badges Shelf for Active Child */}
+      <section className="printable-report">
+        <BadgeShowcase
+          earnedIds={(() => {
+            try {
+              const parsed = JSON.parse(activeStudent.earnedBadges || '[]');
+              return Array.isArray(parsed) ? parsed : [];
+            } catch {
+              return [];
+            }
+          })()}
+          title={`نشان‌ها و افتخارات ${activeStudent.nickname}`}
+          compact
+        />
+      </section>
+
+      {/* Structured AI Smart Progress Analyzer for Parents */}
+      <section className="printable-report rounded-2xl border border-[#E5DAC5] bg-white p-6 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-lg font-extrabold text-stone-900">تحلیل هوشمند پیشرفت و برنامه مرور هفتگی</h3>
+            <h3 className="text-lg font-extrabold text-stone-900">
+              تحلیل هوشمند پیشرفت و برنامه مرور هفتگی
+            </h3>
             <p className="text-xs text-stone-600">
-              بر اساس نتایج واقعی تمرین‌ها و آزمون‌های ثبت‌شده در پایگاه داده ابری گوگل
+              تحلیل ساختاریافته بر اساس نتایج واقعی تمرین‌ها و آزمون‌ها (ذخیره هوشمند تا ۲۴ ساعت)
             </p>
           </div>
-          <button
-            type="button"
-            disabled={aiLoading}
-            onClick={handleAnalyzeWithAI}
-            className="inline-flex items-center gap-2 rounded-xl bg-indigo-700 hover:bg-indigo-800 disabled:opacity-60 px-5 py-2.5 text-sm font-bold text-white cursor-pointer whitespace-nowrap"
-          >
-            <Sparkles className="h-4 w-4" />
-            <span>{aiLoading ? 'در حال تحلیل هوشمند...' : 'دریافت گزارش تحلیلی هوشمند'}</span>
-          </button>
+          <div className="no-print flex flex-wrap items-center gap-2">
+            {aiReport && (
+              <button
+                type="button"
+                disabled={aiLoading}
+                onClick={() => handleAnalyzeWithAI(true)}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-300 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-60 px-3.5 py-2 text-xs font-bold text-indigo-900 cursor-pointer whitespace-nowrap"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${aiLoading ? 'animate-spin' : ''}`} />
+                <span>بروزرسانی تحلیل</span>
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={aiLoading}
+              onClick={() => handleAnalyzeWithAI(false)}
+              className="inline-flex items-center gap-2 rounded-xl bg-indigo-700 hover:bg-indigo-800 disabled:opacity-60 px-5 py-2.5 text-sm font-bold text-white cursor-pointer whitespace-nowrap"
+            >
+              <Sparkles className="h-4 w-4" />
+              <span>{aiLoading ? 'در حال تحلیل هوشمند...' : 'دریافت گزارش تحلیلی هوشمند'}</span>
+            </button>
+          </div>
         </div>
 
+        {aiLoading && <SkeletonLoader variant="compact" />}
         {aiError && <p className="text-sm font-medium text-rose-700">{aiError}</p>}
-        {aiAnalysis && (
-          <div className="rounded-2xl border border-indigo-200 bg-indigo-50/60 p-5 text-sm text-indigo-950 leading-relaxed whitespace-pre-line">
-            {aiAnalysis}
+
+        {aiReport && !aiLoading && (
+          <div className="space-y-3">
+            {aiMeta && (
+              <p className="text-[11px] font-semibold text-stone-500">
+                {aiMeta.cached ? 'بارگذاری‌شده از حافظه ۲۴ ساعته تحلیل هوشمند' : 'تحلیل تازه تولیدشده توسط هوش مصنوعی'}
+              </p>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4 space-y-2">
+                <h4 className="text-sm font-extrabold text-emerald-950 flex items-center gap-1.5">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-700" />
+                  <span>نقاط قوت</span>
+                </h4>
+                <ul className="space-y-1.5 text-xs text-emerald-950 list-disc list-inside leading-relaxed">
+                  {aiReport.strengths.map((item, idx) => (
+                    <li key={idx}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 space-y-2">
+                <h4 className="text-sm font-extrabold text-amber-950 flex items-center gap-1.5">
+                  <AlertCircle className="h-4 w-4 text-amber-700" />
+                  <span>مباحث نیازمند تمرین بیشتر</span>
+                </h4>
+                <ul className="space-y-1.5 text-xs text-amber-950 list-disc list-inside leading-relaxed">
+                  {aiReport.needsPractice.map((item, idx) => (
+                    <li key={idx}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 p-4 space-y-2">
+                <h4 className="text-sm font-extrabold text-indigo-950 flex items-center gap-1.5">
+                  <Sparkles className="h-4 w-4 text-indigo-700" />
+                  <span>برنامه پیشنهادی هفته آینده</span>
+                </h4>
+                <ul className="space-y-1.5 text-xs text-indigo-950 list-disc list-inside leading-relaxed">
+                  {aiReport.nextWeekPlan.map((item, idx) => (
+                    <li key={idx}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
           </div>
         )}
       </section>
